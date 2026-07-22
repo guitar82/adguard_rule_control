@@ -1,0 +1,73 @@
+# AdGuard Rule Control: compact mobile dashboard
+# Replace every entity ID containing "replace_with_" before saving.
+views:
+  - title: Internet
+    path: internet
+    icon: mdi:wifi-cog
+    type: sections
+    max_columns: 1
+    sections:
+      - type: grid
+        title: Status
+        cards:
+          - type: tile
+            entity: binary_sensor.replace_with_any_block_active
+            name: Limits Active
+            icon: mdi:shield-lock
+            color: red
+          - type: tile
+            entity: sensor.replace_with_next_automatic_change
+            name: Next Change
+            icon: mdi:clock-outline
+
+      - type: grid
+        title: Routines
+        cards:
+          - type: tile
+            entity: switch.replace_with_bedtime_profile
+            name: Bedtime
+            icon: mdi:weather-night
+            color: indigo
+          - type: tile
+            entity: switch.replace_with_homework_profile
+            name: Homework
+            icon: mdi:book-open-variant
+            color: amber
+
+      - type: grid
+        title: Quick Controls
+        cards:
+          - type: tile
+            entity: switch.replace_with_youtube_control
+            name: YouTube
+            icon: mdi:youtube
+            color: red
+          - type: tile
+            entity: switch.replace_with_streaming_control
+            name: Streaming
+            icon: mdi:television-play
+            color: purple
+          - type: tile
+            entity: switch.replace_with_social_media_control
+            name: Social Media
+            icon: mdi:account-group
+            color: blue
+
+      - type: grid
+        title: Recovery
+        cards:
+          - type: tile
+            entity: button.replace_with_allow_everything
+            name: Allow Everything
+            icon: mdi:shield-off-outline
+            color: green
+            hide_state: true
+            icon_tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.replace_with_allow_everything
+              confirmation:
+                title: Allow everything?
+                text: This will turn off every managed internet limit.
+                confirm_text: Allow
