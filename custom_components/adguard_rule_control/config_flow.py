@@ -26,6 +26,7 @@ from .const import (
     CONF_HOST,
     CONF_ICON,
     CONF_PORT,
+    CONF_PRESET,
     CONF_RULES,
     CONF_TARGET,
     CONF_TARGET_NAME,
@@ -40,6 +41,7 @@ from .const import (
     TARGET_TYPES,
 )
 from .models import ClientTarget, RuleControl
+from .presets import PRESET_CUSTOM, get_preset, preset_choices
 from .rule_builder import (
     RuleBuilderError,
     preview_control,
@@ -141,6 +143,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._controls = list(config_entry.options.get(CONF_CONTROLS, []))
         self._edit_index: int | None = None
         self._select_action: str | None = None
+        self._preset_defaults: dict[str, Any] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Choose an options action."""
@@ -148,7 +151,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             action = user_input["action"]
             if action == "add":
-                return await self.async_step_control()
+                return await self.async_step_preset()
             if action in {"edit", "duplicate", "preview"}:
                 if not self._controls:
                     errors["base"] = "no_controls"
@@ -179,6 +182,25 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 }
             ),
             errors=errors,
+        )
+
+    async def async_step_preset(self, user_input: dict[str, Any] | None = None):
+        """Choose a rule preset for a new control."""
+        if user_input is not None:
+            preset_key = user_input[CONF_PRESET]
+            preset = get_preset(preset_key)
+            if preset:
+                self._preset_defaults = {
+                    CONF_DISPLAY_NAME: preset.name,
+                    CONF_RULES: list(preset.rules),
+                    CONF_ICON: preset.icon,
+                }
+            else:
+                self._preset_defaults = {}
+            return await self.async_step_control()
+        return self.async_show_form(
+            step_id="preset",
+            data_schema=vol.Schema({vol.Required(CONF_PRESET, default=PRESET_CUSTOM): vol.In(preset_choices())}),
         )
 
     async def async_step_select_control(self, user_input: dict[str, Any] | None = None):
@@ -278,7 +300,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_control(self, user_input: dict[str, Any] | None = None):
         """Add or edit a control."""
-        current = self._controls[self._edit_index] if self._edit_index is not None else {}
+        current = self._controls[self._edit_index] if self._edit_index is not None else self._preset_defaults
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
@@ -312,6 +334,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     self._controls.append(control)
                 else:
                     self._controls[self._edit_index] = control
+                self._preset_defaults = {}
                 return self._save()
 
         return self.async_show_form(

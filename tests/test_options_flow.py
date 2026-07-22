@@ -6,6 +6,7 @@ import pytest
 
 from custom_components.adguard_rule_control.const import TARGET_IPV4, TARGET_MAC
 from custom_components.adguard_rule_control.config_flow import _find_control_index
+from custom_components.adguard_rule_control.presets import PRESET_CUSTOM, get_preset, preset_choices
 from custom_components.adguard_rule_control.rule_builder import RuleBuilderError, validate_client_identifier, validate_rule
 
 
@@ -49,3 +50,17 @@ def test_duplicate_control_options_shape() -> None:
     duplicated["control_id"] = "two"
     duplicated["display_name"] = f"Copy of {duplicated['display_name']}"
     assert duplicated == {"control_id": "two", "display_name": "Copy of Original"}
+
+
+def test_preset_choices_include_custom_and_youtube() -> None:
+    choices = preset_choices()
+    assert choices[PRESET_CUSTOM] == "Custom rules"
+    assert choices["youtube"] == "Block YouTube"
+
+
+def test_youtube_preset_prefills_rules() -> None:
+    preset = get_preset("youtube")
+    assert preset is not None
+    assert preset.name == "Block YouTube"
+    assert "||youtube.com^" in preset.rules
+    assert preset.icon == "mdi:youtube"

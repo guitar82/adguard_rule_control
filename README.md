@@ -14,6 +14,7 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Persistent switch state
 - Import of existing managed-block state
 - Preview of generated rules before use
+- Built-in presets for common services and categories
 - Duplicate and reorder rule controls
 - Optional multi-instance service targeting
 - Debounced writes with a single managed rule block
@@ -71,7 +72,22 @@ Open:
 Settings > Devices & services > AdGuard Rule Control > Configure
 ```
 
-Choose **add**, then enter:
+Choose **add**, then pick a preset or choose custom rules. Presets pre-fill the display name, icon, and AdGuard rule list so most users only need to choose whether the control is global or limited to one client.
+
+Built-in presets include:
+
+- YouTube
+- Facebook and Instagram
+- TikTok
+- Snapchat
+- Discord
+- Reddit
+- Streaming apps
+- Gaming services
+- Social media
+- Custom domain block
+
+After choosing a preset, review or adjust:
 
 - Display name
 - Whether to create a switch entity
@@ -151,6 +167,8 @@ switch.adguard_rule_control_block_youtube
 ```
 
 Turning the switch on adds that control's rules to the managed block. Turning it off removes them. If AdGuard rejects an update or cannot be reached, the switch rolls back to its previous state.
+
+That switch is the main entity you automate in Home Assistant. For example, a preset named **Block YouTube** will create a normal switch entity you can use in dashboards, scenes, scripts, and automations.
 
 ## Services
 

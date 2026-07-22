@@ -32,6 +32,13 @@
           "action": "Action"
         }
       },
+      "preset": {
+        "title": "Choose a rule preset",
+        "description": "Pick a preset to pre-fill common AdGuard rules, or choose custom rules.",
+        "data": {
+          "preset": "Preset"
+        }
+      },
       "move": {
         "title": "Move rule control",
         "data": {
