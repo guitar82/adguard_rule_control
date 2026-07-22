@@ -15,6 +15,7 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Import of existing managed-block state
 - Preview of generated rules before use
 - Built-in presets for common services and categories
+- In-GUI setup instructions and custom rule examples
 - Duplicate and reorder rule controls
 - Optional multi-instance service targeting
 - Debounced writes with a single managed rule block

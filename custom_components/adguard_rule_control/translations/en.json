@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "AdGuard Rule Control",
-        "description": "Connect to AdGuard Home.",
+        "description": "Connect to AdGuard Home. Examples: 192.168.1.10, 192.168.1.10:3000, https://adguard.example.com, or http://adguard.local:3000/control.",
         "data": {
           "host": "Host or base URL",
           "port": "Port",
@@ -28,13 +28,14 @@
     "step": {
       "init": {
         "title": "Rule controls",
+        "description": "Add creates a switch entity you can use in dashboards, scripts, scenes, and automations. Use preview to see the exact AdGuard rules before enabling a switch.",
         "data": {
           "action": "Action"
         }
       },
       "preset": {
         "title": "Choose a rule preset",
-        "description": "Pick a preset to pre-fill common AdGuard rules, or choose custom rules.",
+        "description": "Pick a preset to pre-fill the name, icon, and rule list. You can edit the rules before saving. Choose custom rules if you want to type your own domains.",
         "data": {
           "preset": "Preset"
         }
@@ -74,6 +75,7 @@
       },
       "control": {
         "title": "Rule control",
+        "description": "Each saved control creates one switch entity. Rules are one per line. Example block rule: ||youtube.com^. Example allow rule: @@||allowed.example.com^. Use target type global for everyone, or choose IPv4, IPv6, MAC address, or AdGuard client name to limit the switch to one client.",
         "data": {
           "display_name": "Display name",
           "entity_enabled": "Create switch entity",
@@ -82,6 +84,15 @@
           "target_name": "Target display name",
           "target_value": "Target identifier",
           "icon": "Icon"
+        },
+        "data_description": {
+          "display_name": "This becomes the friendly name of the switch.",
+          "entity_enabled": "Leave this on if you want Home Assistant to create an automation-friendly switch entity.",
+          "rules": "Enter one AdGuard rule per line. Presets fill this in for you.",
+          "target_type": "Global applies to everyone. Client-specific targets add AdGuard's client modifier automatically.",
+          "target_name": "Optional friendly name shown in comments inside the managed rule block.",
+          "target_value": "For client-specific controls, enter an IP address, MAC address, or AdGuard client name.",
+          "icon": "Optional Home Assistant icon, such as mdi:youtube or mdi:web-off."
         }
       }
     },
