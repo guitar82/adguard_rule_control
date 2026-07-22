@@ -55,6 +55,54 @@ enable_for:
       selector:
         text:
 
+disable_for:
+  name: Allow temporarily
+  description: Disable a rule control temporarily, then restore its previous state, including across Home Assistant restarts.
+  fields:
+    control_id:
+      required: true
+      selector:
+        text:
+    minutes:
+      required: true
+      example: 60
+      selector:
+        number:
+          min: 1
+          max: 10080
+          unit_of_measurement: minutes
+          mode: box
+    entry_id:
+      required: false
+      selector:
+        text:
+
+disable_all:
+  name: Allow everything
+  description: Disable every managed rule control with one synchronized AdGuard update.
+  fields:
+    entry_id:
+      required: false
+      selector:
+        text:
+
+set_profile_state:
+  name: Set profile state
+  description: Enable or disable every rule control in a configured profile.
+  fields:
+    profile_id:
+      required: true
+      selector:
+        text:
+    enabled:
+      required: true
+      selector:
+        boolean:
+    entry_id:
+      required: false
+      selector:
+        text:
+
 set_state:
   name: Set rule control state
   description: Set a rule control state by stable control ID.

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 from custom_components.adguard_rule_control import (
+    _async_remove_stale_devices,
     _async_remove_stale_entities,
     _async_update_listener,
 )
@@ -72,7 +73,7 @@ def test_stale_control_entities_are_removed() -> None:
             return_value=entries,
         ),
     ):
-        _async_remove_stale_entities(hass, entry, controls)
+        _async_remove_stale_entities(hass, entry, controls, [], False)
 
     assert registry.async_remove.call_args_list == [
         call("switch.deleted"),
@@ -101,6 +102,42 @@ def test_disabled_control_entities_are_removed() -> None:
             return_value=entries,
         ),
     ):
-        _async_remove_stale_entities(hass, entry, controls)
+        _async_remove_stale_entities(hass, entry, controls, [], False)
 
     registry.async_remove.assert_called_once_with("switch.disabled")
+
+
+def test_stale_client_devices_are_removed() -> None:
+    hass = SimpleNamespace()
+    entry = SimpleNamespace(entry_id="entry")
+    target = SimpleNamespace(
+        identifier_type="client_name",
+        identifier_value="Kid Tablet",
+    )
+    controls = [SimpleNamespace(entity_enabled=True, target=target)]
+    registry = SimpleNamespace(async_remove_device=MagicMock())
+    entries = [
+        SimpleNamespace(
+            id="main",
+            identifiers={(DOMAIN, "entry")},
+        ),
+        SimpleNamespace(
+            id="active",
+            identifiers={(DOMAIN, "entry:target:client_name:Kid Tablet")},
+        ),
+        SimpleNamespace(
+            id="stale",
+            identifiers={(DOMAIN, "entry:target:client_name:Old Tablet")},
+        ),
+    ]
+
+    with (
+        patch("custom_components.adguard_rule_control.dr.async_get", return_value=registry),
+        patch(
+            "custom_components.adguard_rule_control.dr.async_entries_for_config_entry",
+            return_value=entries,
+        ),
+    ):
+        _async_remove_stale_devices(hass, entry, controls)
+
+    registry.async_remove_device.assert_called_once_with("stale")

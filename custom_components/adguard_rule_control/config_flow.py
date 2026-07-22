@@ -22,6 +22,8 @@ from .const import (
     AUDIENCE_CLIENT,
     AUDIENCE_EVERYONE,
     CLIENT_CHOICE_MANUAL,
+    CONF_ACTIVITY_ENABLED,
+    CONF_ACTIVITY_LIMIT,
     CONF_AUDIENCE,
     CONF_BASE_URL,
     CONF_BLOCKED_SERVICE_IDS,
@@ -39,6 +41,9 @@ from .const import (
     CONF_KIND,
     CONF_PORT,
     CONF_PRESET,
+    CONF_PROFILE_CONTROL_IDS,
+    CONF_PROFILE_ID,
+    CONF_PROFILES,
     CONF_QUICK_BLOCK_MINUTES,
     CONF_RULES,
     CONF_TARGET,
@@ -49,15 +54,18 @@ from .const import (
     CONF_VERIFY_SSL,
     CONTROL_KIND_BLOCKED_SERVICES,
     CONTROL_KIND_RULES,
+    DEFAULT_ACTIVITY_LIMIT,
     DEFAULT_QUICK_BLOCK_MINUTES,
     DOMAIN,
+    MAX_ACTIVITY_LIMIT,
     MAX_PREVIEW_LINES,
     MAX_TEMPORARY_BLOCK_MINUTES,
+    MIN_ACTIVITY_LIMIT,
     NAME,
     TARGET_CLIENT_NAME,
     TARGET_GLOBAL,
 )
-from .models import ClientTarget, RuleControl
+from .models import ClientTarget, ControlProfile, RuleControl
 from .presets import (
     BLOCKED_SERVICE_PRESET_CUSTOM,
     PRESET_BLOCK_WEBSITE,
@@ -80,12 +88,16 @@ from .rule_builder import (
 _ACTION_CHOICES = {
     "add": "Add a website or rule preset",
     "add_blocked_services": "Add AdGuard built-in services",
+    "add_profile": "Add a Bedtime, Homework, or other profile",
     "edit": "Edit an existing control",
+    "edit_profile": "Edit a profile",
     "duplicate": "Duplicate an existing control",
     "delete": "Delete a control",
+    "delete_profile": "Delete a profile",
     "move": "Change rule order",
     "preview": "Preview a control",
     "import_state": "Import current state from AdGuard",
+    "activity": "Privacy and activity settings",
     "finish": "Finish without changes",
 }
 
@@ -161,7 +173,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: user_input.get(CONF_PASSWORD, ""),
                         CONF_VERIFY_SSL: user_input[CONF_VERIFY_SSL],
                     },
-                    options={CONF_CONTROLS: []},
+                    options={
+                        CONF_CONTROLS: [],
+                        CONF_PROFILES: [],
+                        CONF_ACTIVITY_ENABLED: False,
+                        CONF_ACTIVITY_LIMIT: DEFAULT_ACTIVITY_LIMIT,
+                    },
                 )
         return self.async_show_form(
             step_id="user",
@@ -289,8 +306,23 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
-        self._controls = list(config_entry.options.get(CONF_CONTROLS, []))
+        self._options = dict(config_entry.options)
+        self._controls = [
+            dict(control)
+            for control in config_entry.options.get(CONF_CONTROLS, [])
+        ]
+        self._profiles = [
+            {
+                **profile,
+                CONF_PROFILE_CONTROL_IDS: list(
+                    profile.get(CONF_PROFILE_CONTROL_IDS, [])
+                ),
+            }
+            for profile in config_entry.options.get(CONF_PROFILES, [])
+        ]
         self._edit_index: int | None = None
+        self._profile_edit_index: int | None = None
+        self._profile_action: str | None = None
         self._select_action: str | None = None
         self._preset_defaults: dict[str, Any] = {}
         self._pending_control: dict[str, Any] | None = None
@@ -308,6 +340,18 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
                 return await self.async_step_preset()
             if action == "add_blocked_services":
                 return await self.async_step_blocked_service_preset()
+            if action == "add_profile":
+                if not self._controls:
+                    errors["base"] = "no_controls"
+                else:
+                    self._profile_edit_index = None
+                    return await self.async_step_profile()
+            if action in {"edit_profile", "delete_profile"}:
+                if not self._profiles:
+                    errors["base"] = "no_profiles"
+                else:
+                    self._profile_action = action
+                    return await self.async_step_select_profile()
             if action in {"edit", "duplicate", "preview"}:
                 if not self._controls:
                     errors["base"] = "no_controls"
@@ -326,6 +370,8 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
                     return await self.async_step_move()
             if action == "import_state":
                 return await self.async_step_import_state()
+            if action == "activity":
+                return await self.async_step_activity()
             if not errors:
                 return self._save()
         return self.async_show_form(
@@ -586,12 +632,121 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
             data_schema=vol.Schema({vol.Required(CONF_CONTROL_ID): vol.In(controls)}),
         )
 
+    async def async_step_select_profile(self, user_input: dict[str, Any] | None = None):
+        """Select a profile to edit or delete."""
+        profiles = _profile_choices(self._profiles)
+        if user_input is not None:
+            selected = user_input[CONF_PROFILE_ID]
+            self._profile_edit_index = _find_profile_index(self._profiles, selected)
+            if self._profile_action == "delete_profile":
+                self._profiles.pop(self._profile_edit_index)
+                self._profile_edit_index = None
+                return self._save()
+            return await self.async_step_profile()
+        return self.async_show_form(
+            step_id="select_profile",
+            data_schema=vol.Schema({vol.Required(CONF_PROFILE_ID): vol.In(profiles)}),
+        )
+
+    async def async_step_profile(self, user_input: dict[str, Any] | None = None):
+        """Add or edit a named group of rule controls."""
+        current = (
+            self._profiles[self._profile_edit_index]
+            if self._profile_edit_index is not None
+            else {}
+        )
+        errors: dict[str, str] = {}
+        choices = _control_choices(self._controls)
+        if user_input is not None:
+            try:
+                display_name = validate_comment_label(
+                    user_input[CONF_DISPLAY_NAME],
+                    "Profile name",
+                )
+                control_ids = tuple(user_input[CONF_PROFILE_CONTROL_IDS])
+                if not control_ids:
+                    raise RuleBuilderError("Select at least one control")
+            except RuleBuilderError:
+                errors["base"] = "invalid_profile"
+            else:
+                profile = ControlProfile(
+                    profile_id=current.get(CONF_PROFILE_ID) or str(uuid.uuid4()),
+                    display_name=display_name,
+                    control_ids=control_ids,
+                    icon=user_input.get(CONF_ICON) or "mdi:account-group",
+                ).as_dict()
+                if self._profile_edit_index is None:
+                    self._profiles.append(profile)
+                else:
+                    self._profiles[self._profile_edit_index] = profile
+                self._profile_edit_index = None
+                return self._save()
+        return self.async_show_form(
+            step_id="profile",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_DISPLAY_NAME,
+                        default=current.get(CONF_DISPLAY_NAME, "Bedtime"),
+                    ): str,
+                    vol.Required(
+                        CONF_PROFILE_CONTROL_IDS,
+                        default=list(current.get(CONF_PROFILE_CONTROL_IDS, [])),
+                    ): cv.multi_select(choices),
+                    vol.Optional(
+                        CONF_ICON,
+                        default=current.get(CONF_ICON, "mdi:account-group"),
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_activity(self, user_input: dict[str, Any] | None = None):
+        """Configure optional aggregate query-log activity."""
+        if user_input is not None:
+            self._options[CONF_ACTIVITY_ENABLED] = user_input[CONF_ACTIVITY_ENABLED]
+            self._options[CONF_ACTIVITY_LIMIT] = int(user_input[CONF_ACTIVITY_LIMIT])
+            return self._save()
+        return self.async_show_form(
+            step_id="activity",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ACTIVITY_ENABLED,
+                        default=self._options.get(CONF_ACTIVITY_ENABLED, False),
+                    ): bool,
+                    vol.Required(
+                        CONF_ACTIVITY_LIMIT,
+                        default=self._options.get(
+                            CONF_ACTIVITY_LIMIT,
+                            DEFAULT_ACTIVITY_LIMIT,
+                        ),
+                    ): vol.All(
+                        vol.Coerce(int),
+                        vol.Range(min=MIN_ACTIVITY_LIMIT, max=MAX_ACTIVITY_LIMIT),
+                    ),
+                }
+            ),
+        )
+
     async def async_step_delete(self, user_input: dict[str, Any] | None = None):
         """Delete a configured control."""
         controls = _control_choices(self._controls)
         if user_input is not None:
             selected = user_input[CONF_CONTROL_ID]
             self._controls = [control for control in self._controls if control[CONF_CONTROL_ID] != selected]
+            for profile in self._profiles:
+                profile[CONF_PROFILE_CONTROL_IDS] = [
+                    control_id
+                    for control_id in profile.get(CONF_PROFILE_CONTROL_IDS, [])
+                    if control_id != selected
+                ]
+            self._profiles = [
+                profile
+                for profile in self._profiles
+                if profile.get(CONF_PROFILE_CONTROL_IDS)
+            ]
             return self._save()
         return self.async_show_form(
             step_id="delete",
@@ -809,7 +964,9 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
         )
 
     def _save(self):
-        return self.async_create_entry(title="", data={CONF_CONTROLS: self._controls})
+        self._options[CONF_CONTROLS] = self._controls
+        self._options[CONF_PROFILES] = self._profiles
+        return self.async_create_entry(title="", data=self._options)
 
     async def _async_blocked_service_choices(self) -> dict[str, str]:
         """Return available blocked service choices."""
@@ -862,9 +1019,23 @@ def _control_choices(controls: list[dict[str, Any]]) -> dict[str, str]:
     return {control[CONF_CONTROL_ID]: control[CONF_DISPLAY_NAME] for control in controls}
 
 
+def _profile_choices(profiles: list[dict[str, Any]]) -> dict[str, str]:
+    """Return a choices mapping for configured profiles."""
+    return {profile[CONF_PROFILE_ID]: profile[CONF_DISPLAY_NAME] for profile in profiles}
+
+
 def _find_control_index(controls: list[dict[str, Any]], control_id: str) -> int:
     """Find a configured control by ID."""
     return next(index for index, control in enumerate(controls) if control[CONF_CONTROL_ID] == control_id)
+
+
+def _find_profile_index(profiles: list[dict[str, Any]], profile_id: str) -> int:
+    """Find a configured profile by ID."""
+    return next(
+        index
+        for index, profile in enumerate(profiles)
+        if profile[CONF_PROFILE_ID] == profile_id
+    )
 
 
 def _slugify_entity_id(value: str) -> str:

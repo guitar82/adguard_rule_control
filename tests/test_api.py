@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -234,3 +235,54 @@ async def test_update_blocked_services_config() -> None:
     await client.async_update_blocked_services_config(["youtube"], {"time_zone": "Local"})
     assert session.requests[0][0] == "PUT"
     assert session.requests[0][2]["json"] == {"ids": ["youtube"], "schedule": {"time_zone": "Local"}}
+
+
+@pytest.mark.asyncio
+async def test_get_blocked_activity_returns_aggregates_without_domains() -> None:
+    recent = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    old = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    session = FakeSession(
+        [
+            FakeResponse(
+                payload={
+                    "data": [
+                        {
+                            "time": recent,
+                            "client": "192.168.1.30",
+                            "client_info": {"name": "Kid Tablet"},
+                            "service_name": "YouTube",
+                            "question": {"host": "private.example"},
+                        },
+                        {
+                            "time": recent,
+                            "client": "192.168.1.30",
+                            "service_name": "YouTube",
+                        },
+                        {"time": old, "client": "Old Client", "service_name": "Netflix"},
+                    ]
+                }
+            )
+        ]
+    )
+    client = AdGuardRuleControlClient(session, "http://adguard.local")
+
+    result = await client.async_get_blocked_activity(limit=200)
+
+    assert result["blocked_last_24_hours"] == 2
+    assert result["top_services"] == {"YouTube": 2}
+    assert result["top_clients"] == {"Kid Tablet": 1, "192.168.1.30": 1}
+    assert "private.example" not in str(result)
+    assert session.requests[0][2]["params"] == {
+        "response_status": "blocked",
+        "limit": 200,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_blocked_activity_rejects_malformed_response() -> None:
+    client = AdGuardRuleControlClient(
+        FakeSession([FakeResponse(payload={"data": {}})]),
+        "http://adguard.local",
+    )
+    with pytest.raises(AdGuardInvalidResponseError):
+        await client.async_get_blocked_activity()

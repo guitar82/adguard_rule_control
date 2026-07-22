@@ -50,7 +50,7 @@
     "step": {
       "init": {
         "title": "Rule controls",
-        "description": "Add creates a switch entity you can use in dashboards, scripts, scenes, and automations. Use presets for custom rules, or add blocked services to control AdGuard's built-in service blocks.",
+        "description": "Create rule controls, combine them into family profiles, or configure optional privacy-conscious activity totals. Every control is available to native Home Assistant dashboards and automations.",
         "data": {
           "action": "Action"
         }
@@ -69,7 +69,7 @@
           "display_name": "This becomes the friendly name of the switch.",
           "blocked_service_ids": "Select one or more built-in AdGuard services.",
           "blocked_service_target": "Choose everyone or one persistent client from AdGuard Home.",
-          "quick_block_minutes": "The dashboard button will block for this many minutes, then turn itself off.",
+          "quick_block_minutes": "The dashboard buttons will temporarily block or allow for this many minutes, then restore the previous state.",
           "icon": "Optional Home Assistant icon, such as mdi:youtube or mdi:block-helper."
         }
       },
@@ -157,6 +157,39 @@
           "control_id": "Rule control"
         }
       },
+      "select_profile": {
+        "title": "Choose a Profile",
+        "description": "Profiles combine existing controls into one switch, such as Bedtime, Homework, Dinner, or School Night.",
+        "data": {
+          "profile_id": "Profile"
+        }
+      },
+      "profile": {
+        "title": "Control Profile",
+        "description": "Choose the controls that should turn on and off together. The profile becomes one Home Assistant switch and uses one synchronized AdGuard update.",
+        "data": {
+          "display_name": "Profile name",
+          "profile_control_ids": "Included controls",
+          "icon": "Icon"
+        },
+        "data_description": {
+          "display_name": "Examples include Bedtime, Homework, Dinner, or School Night.",
+          "profile_control_ids": "Select one or more existing rule controls.",
+          "icon": "Optional Home Assistant icon, such as mdi:weather-night or mdi:school."
+        }
+      },
+      "activity": {
+        "title": "Privacy and Activity",
+        "description": "Optional activity totals read only recent blocked query-log entries. Domains and raw rows are never retained. Client names and blocked-service totals may appear as sensor attributes when enabled.",
+        "data": {
+          "activity_enabled": "Enable aggregate activity sensors",
+          "activity_limit": "Maximum recent rows to examine"
+        },
+        "data_description": {
+          "activity_enabled": "Leave this off for the most private and lightweight setup.",
+          "activity_limit": "Higher values improve the last-24-hours estimate on busy networks but require a larger AdGuard response."
+        }
+      },
       "control": {
         "title": "Rule control",
         "description": "Each saved control creates one switch entity. Rules are one per line. Example block rule: ||youtube.com^. Example allow rule: @@||allowed.example.com^. Use target type global for everyone, or choose IPv4, IPv6, MAC address, or AdGuard client name to limit the switch to one client.",
@@ -177,7 +210,7 @@
           "target_type": "Global applies to everyone. Client-specific targets add AdGuard's client modifier automatically.",
           "target_name": "Optional friendly name shown in comments inside the managed rule block.",
           "target_value": "For client-specific controls, enter an IP address, MAC address, or AdGuard client name.",
-          "quick_block_minutes": "The dashboard button will enable this control for this many minutes.",
+          "quick_block_minutes": "The dashboard buttons will temporarily block or allow for this many minutes, then restore the previous state.",
           "icon": "Optional Home Assistant icon, such as mdi:youtube or mdi:web-off."
         }
       },
@@ -192,7 +225,9 @@
     "error": {
       "invalid_rule": "Rule or client target is invalid.",
       "invalid_domain": "Enter a valid website domain, such as youtube.com.",
+      "invalid_profile": "Choose a profile name and at least one rule control.",
       "no_controls": "Add a rule control first.",
+      "no_profiles": "Add a profile first.",
       "unsupported_service_group": "None of the services in that group are available from this AdGuard Home installation.",
       "block_all_not_confirmed": "Confirmation is required before saving a network-wide Block All rule."
     }

@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -23,9 +23,14 @@ from .api import (
     AdGuardRuleControlClient,
 )
 from .const import (
+    ACTIVITY_REFRESH_INTERVAL_SECONDS,
+    CONF_ACTIVITY_ENABLED,
+    CONF_ACTIVITY_LIMIT,
     CONF_CONTROLS,
+    CONF_PROFILES,
     CONTROL_KIND_BLOCKED_SERVICES,
     CONTROL_KIND_RULES,
+    DEFAULT_ACTIVITY_LIMIT,
     DOMAIN,
     MAX_TEMPORARY_BLOCK_MINUTES,
     STATE_REFRESH_INTERVAL_SECONDS,
@@ -33,7 +38,7 @@ from .const import (
     STORAGE_VERSION,
     WRITE_DEBOUNCE_SECONDS,
 )
-from .models import RuleControl
+from .models import ControlProfile, RuleControl
 from .rule_builder import (
     RuleBuilderError,
     build_managed_block,
@@ -56,6 +61,7 @@ class AdGuardRuleControlManager:
         self._temporary_unsubs: dict[str, Callable[[], None]] = {}
         self.states: dict[str, bool] = {}
         self.temporary_until: dict[str, str] = {}
+        self.temporary_restore_states: dict[str, bool] = {}
         self.connected = False
         self.last_error: str | None = None
         self.last_sync: str | None = None
@@ -64,11 +70,38 @@ class AdGuardRuleControlManager:
         self.control_status: dict[str, dict[str, Any]] = {}
         self.last_managed_blocked_service_ids: set[str] = set()
         self.managed_client_blocked_services: dict[str, dict[str, Any]] = {}
+        self.activity_summary: dict[str, Any] = {}
+        self.activity_last_refresh: datetime | None = None
+        self.activity_error: str | None = None
 
     @property
     def controls(self) -> list[RuleControl]:
         """Return configured controls."""
         return [RuleControl.from_dict(control) for control in self.entry.options.get(CONF_CONTROLS, [])]
+
+    @property
+    def profiles(self) -> list[ControlProfile]:
+        """Return configured control profiles."""
+        valid_ids = {control.control_id for control in self.controls}
+        profiles: list[ControlProfile] = []
+        for raw_profile in self.entry.options.get(CONF_PROFILES, []):
+            profile = ControlProfile.from_dict(raw_profile)
+            control_ids = tuple(control_id for control_id in profile.control_ids if control_id in valid_ids)
+            if control_ids:
+                profiles.append(
+                    ControlProfile(
+                        profile_id=profile.profile_id,
+                        display_name=profile.display_name,
+                        control_ids=control_ids,
+                        icon=profile.icon,
+                    )
+                )
+        return profiles
+
+    @property
+    def activity_enabled(self) -> bool:
+        """Return whether aggregate query-log activity is enabled."""
+        return bool(self.entry.options.get(CONF_ACTIVITY_ENABLED, False))
 
     @property
     def available(self) -> bool:
@@ -88,6 +121,10 @@ class AdGuardRuleControlManager:
             str(key): str(value)
             for key, value in data.get("temporary_until", {}).items()
             if isinstance(value, str)
+        }
+        self.temporary_restore_states = {
+            str(key): bool(value)
+            for key, value in data.get("temporary_restore_states", {}).items()
         }
         for control in self.controls:
             self.states.setdefault(control.control_id, False)
@@ -174,7 +211,10 @@ class AdGuardRuleControlManager:
                             and set(control.blocked_service_ids).issubset(set(client.get("blocked_services", [])))
                         )
                     self.states[control.control_id] = enabled
-                    if not enabled:
+                    if (
+                        control.control_id in self.temporary_until
+                        and enabled == self.temporary_restore_states.get(control.control_id, False)
+                    ):
                         self._clear_temporary_timer(control.control_id)
 
                 self.connected = True
@@ -188,6 +228,7 @@ class AdGuardRuleControlManager:
                     control.control_id: self._status_for_control(control, self.states.get(control.control_id, False))
                     for control in controls
                 }
+                await self._async_refresh_activity()
                 await self._async_save_state()
                 ir.async_delete_issue(self.hass, DOMAIN, "managed_state_unavailable")
         except AdGuardAuthenticationError as err:
@@ -215,39 +256,107 @@ class AdGuardRuleControlManager:
         return self.states.get(control_id, False)
 
     def temporary_until_for(self, control_id: str) -> str | None:
-        """Return an active temporary-block deadline."""
+        """Return an active temporary-state deadline."""
         return self.temporary_until.get(control_id)
+
+    def temporary_restore_state_for(self, control_id: str) -> bool | None:
+        """Return the state that will be restored at the temporary deadline."""
+        if control_id not in self.temporary_until:
+            return None
+        return self.temporary_restore_states.get(control_id, False)
+
+    def profile_state_for(self, profile_id: str) -> bool:
+        """Return whether every member of a profile is enabled."""
+        profile = next((item for item in self.profiles if item.profile_id == profile_id), None)
+        return bool(profile and all(self.states.get(control_id, False) for control_id in profile.control_ids))
+
+    @property
+    def active_control_names(self) -> list[str]:
+        """Return friendly names for active controls."""
+        return [control.display_name for control in self.controls if self.states.get(control.control_id, False)]
+
+    @property
+    def next_temporary_deadline(self) -> datetime | None:
+        """Return the next valid automatic state restoration deadline."""
+        deadlines = [
+            dt_util.as_utc(deadline)
+            for value in self.temporary_until.values()
+            if (deadline := dt_util.parse_datetime(value)) is not None
+        ]
+        return min(deadlines, default=None)
 
     async def async_set_control_state(self, control_id: str, enabled: bool) -> None:
         """Set a control state and synchronize AdGuard rules."""
-        if control_id not in {control.control_id for control in self.controls}:
-            raise ValueError("Unknown rule control")
-        previous = self.states.get(control_id, False)
-        previous_deadline = self.temporary_until.get(control_id)
-        self._clear_temporary_timer(control_id)
-        self.states[control_id] = enabled
+        await self._async_apply_state_changes({control_id: enabled})
+
+    async def async_enable_control_for(self, control_id: str, minutes: int) -> None:
+        """Enable a control temporarily and restore its previous state."""
+        await self._async_set_control_for(control_id, True, minutes)
+
+    async def async_disable_control_for(self, control_id: str, minutes: int) -> None:
+        """Disable a control temporarily and restore its previous state."""
+        await self._async_set_control_for(control_id, False, minutes)
+
+    async def async_set_profile_state(self, profile_id: str, enabled: bool) -> None:
+        """Set every control in a profile with one synchronized write."""
+        profile = next((item for item in self.profiles if item.profile_id == profile_id), None)
+        if profile is None:
+            raise ValueError("Unknown control profile")
+        await self._async_apply_state_changes(
+            {control_id: enabled for control_id in profile.control_ids}
+        )
+
+    async def async_disable_all_controls(self) -> None:
+        """Disable every configured control with one synchronized write."""
+        await self._async_apply_state_changes(
+            {control.control_id: False for control in self.controls}
+        )
+
+    async def _async_apply_state_changes(self, updates: dict[str, bool]) -> None:
+        """Apply a group of control state changes and roll back atomically."""
+        valid_ids = {control.control_id for control in self.controls}
+        if unknown := set(updates) - valid_ids:
+            raise ValueError(f"Unknown rule control: {sorted(unknown)[0]}")
+        previous_states = {control_id: self.states.get(control_id, False) for control_id in updates}
+        previous_timers = {
+            control_id: (
+                self.temporary_until.get(control_id),
+                self.temporary_restore_states.get(control_id, False),
+            )
+            for control_id in updates
+        }
+        for control_id, enabled in updates.items():
+            self._clear_temporary_timer(control_id)
+            self.states[control_id] = enabled
         self._notify_listeners()
         await asyncio.sleep(WRITE_DEBOUNCE_SECONDS)
         try:
             await self.async_sync()
         except Exception:
-            self.states[control_id] = previous
-            if previous_deadline:
-                self._set_temporary_timer(control_id, previous_deadline)
+            self.states.update(previous_states)
+            for control_id, (deadline, restore_state) in previous_timers.items():
+                if deadline:
+                    self._set_temporary_timer(control_id, deadline, restore_state)
             self._notify_listeners()
             raise
 
-    async def async_enable_control_for(self, control_id: str, minutes: int) -> None:
-        """Enable a control temporarily and restore it automatically."""
+    async def _async_set_control_for(self, control_id: str, enabled: bool, minutes: int) -> None:
+        """Temporarily set one control and restore its previous state."""
         if minutes < 1 or minutes > MAX_TEMPORARY_BLOCK_MINUTES:
-            raise ValueError(f"Duration must be between 1 and {MAX_TEMPORARY_BLOCK_MINUTES} minutes")
+            raise ValueError(
+                f"Duration must be between 1 and {MAX_TEMPORARY_BLOCK_MINUTES} minutes"
+            )
         if control_id not in {control.control_id for control in self.controls}:
             raise ValueError("Unknown rule control")
         previous = self.states.get(control_id, False)
         previous_deadline = self.temporary_until.get(control_id)
+        previous_restore_state = self.temporary_restore_states.get(control_id, False)
+        restore_state = previous_restore_state if previous_deadline and previous == enabled else previous
+        if previous == enabled and not previous_deadline:
+            return
         deadline = dt_util.utcnow() + timedelta(minutes=minutes)
-        self.states[control_id] = True
-        self._set_temporary_timer(control_id, deadline.isoformat())
+        self.states[control_id] = enabled
+        self._set_temporary_timer(control_id, deadline.isoformat(), restore_state)
         self._notify_listeners()
         await asyncio.sleep(WRITE_DEBOUNCE_SECONDS)
         try:
@@ -256,7 +365,7 @@ class AdGuardRuleControlManager:
             self.states[control_id] = previous
             self._clear_temporary_timer(control_id)
             if previous_deadline:
-                self._set_temporary_timer(control_id, previous_deadline)
+                self._set_temporary_timer(control_id, previous_deadline, previous_restore_state)
             self._notify_listeners()
             raise
 
@@ -405,6 +514,11 @@ class AdGuardRuleControlManager:
                 "temporary_until": {
                     key: value for key, value in self.temporary_until.items() if key in valid_ids
                 },
+                "temporary_restore_states": {
+                    key: value
+                    for key, value in self.temporary_restore_states.items()
+                    if key in valid_ids and key in self.temporary_until
+                },
             }
         )
 
@@ -412,22 +526,37 @@ class AdGuardRuleControlManager:
         """Restore persisted temporary timers after restart."""
         valid_ids = {control.control_id for control in self.controls}
         for control_id in list(self.temporary_until):
-            if control_id not in valid_ids or not self.states.get(control_id, False):
+            restore_state = self.temporary_restore_states.get(control_id, False)
+            if control_id not in valid_ids or self.states.get(control_id, False) == restore_state:
                 self._clear_temporary_timer(control_id)
                 continue
-            self._set_temporary_timer(control_id, self.temporary_until[control_id])
+            self._set_temporary_timer(
+                control_id,
+                self.temporary_until[control_id],
+                restore_state,
+            )
 
     def _discard_expired_temporary_states(self) -> None:
         """Prevent an expired temporary block from being re-applied at startup."""
         now = dt_util.utcnow()
         for control_id, deadline_iso in list(self.temporary_until.items()):
             deadline = dt_util.parse_datetime(deadline_iso)
-            if deadline is None or dt_util.as_utc(deadline) <= now or not self.states.get(control_id, False):
+            restore_state = self.temporary_restore_states.get(control_id, False)
+            if deadline is None or dt_util.as_utc(deadline) <= now:
                 self.temporary_until.pop(control_id, None)
-                self.states[control_id] = False
+                self.temporary_restore_states.pop(control_id, None)
+                self.states[control_id] = restore_state
+            elif self.states.get(control_id, False) == restore_state:
+                self.temporary_until.pop(control_id, None)
+                self.temporary_restore_states.pop(control_id, None)
 
-    def _set_temporary_timer(self, control_id: str, deadline_iso: str) -> None:
-        """Schedule one persisted automatic turn-off."""
+    def _set_temporary_timer(
+        self,
+        control_id: str,
+        deadline_iso: str,
+        restore_state: bool,
+    ) -> None:
+        """Schedule one persisted automatic state restoration."""
         self._clear_temporary_timer(control_id)
         deadline = dt_util.parse_datetime(deadline_iso)
         if deadline is None:
@@ -435,6 +564,7 @@ class AdGuardRuleControlManager:
         deadline = dt_util.as_utc(deadline)
         delay = max(0.0, (deadline - dt_util.utcnow()).total_seconds())
         self.temporary_until[control_id] = deadline.isoformat()
+        self.temporary_restore_states[control_id] = restore_state
         self._temporary_unsubs[control_id] = async_call_later(
             self.hass,
             delay,
@@ -446,20 +576,44 @@ class AdGuardRuleControlManager:
         if unsub := self._temporary_unsubs.pop(control_id, None):
             unsub()
         self.temporary_until.pop(control_id, None)
+        self.temporary_restore_states.pop(control_id, None)
 
     async def _async_expire_control(self, control_id: str) -> None:
         """Turn off a control whose temporary period ended."""
         self._temporary_unsubs.pop(control_id, None)
         self.temporary_until.pop(control_id, None)
+        restore_state = self.temporary_restore_states.pop(control_id, False)
         if control_id not in {control.control_id for control in self.controls}:
             await self._async_save_state()
             return
-        self.states[control_id] = False
+        self.states[control_id] = restore_state
         try:
             await self.async_sync()
         except Exception as err:  # noqa: BLE001 - expose the sanitized API error on entities
             self.last_error = str(err)
             self._notify_listeners()
+
+    async def _async_refresh_activity(self) -> None:
+        """Refresh optional aggregate activity without retaining query-log rows."""
+        if not self.activity_enabled:
+            self.activity_summary = {}
+            self.activity_last_refresh = None
+            self.activity_error = None
+            return
+        now = dt_util.utcnow()
+        if (
+            self.activity_last_refresh is not None
+            and (now - self.activity_last_refresh).total_seconds()
+            < ACTIVITY_REFRESH_INTERVAL_SECONDS
+        ):
+            return
+        limit = int(self.entry.options.get(CONF_ACTIVITY_LIMIT, DEFAULT_ACTIVITY_LIMIT))
+        try:
+            self.activity_summary = await self.client.async_get_blocked_activity(limit=limit)
+            self.activity_last_refresh = now
+            self.activity_error = None
+        except (AdGuardConnectionError, AdGuardInvalidResponseError) as err:
+            self.activity_error = str(err)
 
     def _create_issue(self, issue_id: str, error: str) -> None:
         """Create an actionable Home Assistant repair issue."""

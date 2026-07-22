@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.adguard_rule_control.config_flow import OptionsFlowHandler, _find_control_index
-from custom_components.adguard_rule_control.const import TARGET_IPV4, TARGET_MAC
+from custom_components.adguard_rule_control.config_flow import (
+    OptionsFlowHandler,
+    _find_control_index,
+    _find_profile_index,
+)
+from custom_components.adguard_rule_control.const import (
+    CONF_ACTIVITY_ENABLED,
+    CONF_CONTROLS,
+    CONF_PROFILES,
+    TARGET_IPV4,
+    TARGET_MAC,
+)
+from custom_components.adguard_rule_control.models import ControlProfile
 from custom_components.adguard_rule_control.presets import (
     PRESET_BLOCK_WEBSITE,
     PRESET_CUSTOM,
@@ -49,6 +60,39 @@ def test_delete_control_options_shape() -> None:
 def test_find_control_index() -> None:
     controls = [{"control_id": "one"}, {"control_id": "two"}]
     assert _find_control_index(controls, "two") == 1
+
+
+def test_control_profile_round_trip_and_lookup() -> None:
+    profile = ControlProfile(
+        profile_id="bedtime",
+        display_name="Bedtime",
+        control_ids=("youtube", "gaming"),
+        icon="mdi:weather-night",
+    )
+    raw = profile.as_dict()
+
+    assert ControlProfile.from_dict(raw) == profile
+    assert _find_profile_index([raw], "bedtime") == 0
+
+
+def test_options_save_preserves_unrelated_settings() -> None:
+    entry = type(
+        "Entry",
+        (),
+        {
+            "options": {
+                CONF_CONTROLS: [],
+                CONF_PROFILES: [],
+                CONF_ACTIVITY_ENABLED: True,
+            }
+        },
+    )()
+    handler = OptionsFlowHandler(entry)
+    handler.async_create_entry = MagicMock(return_value={"saved": True})
+
+    assert handler._save() == {"saved": True}
+    saved = handler.async_create_entry.call_args.kwargs["data"]
+    assert saved[CONF_ACTIVITY_ENABLED] is True
 
 
 def test_move_control_options_shape() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "adguard_rule_control"
 NAME = "AdGuard Rule Control"
-VERSION = "0.1.0-beta.7"
+VERSION = "0.1.0-beta.8"
 
 PLATFORMS = ["switch", "binary_sensor", "sensor", "button"]
 
@@ -17,7 +17,10 @@ CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 
 CONF_CONTROLS = "controls"
+CONF_PROFILES = "profiles"
 CONF_CONTROL_ID = "control_id"
+CONF_PROFILE_ID = "profile_id"
+CONF_PROFILE_CONTROL_IDS = "profile_control_ids"
 CONF_DISPLAY_NAME = "display_name"
 CONF_RULES = "rules"
 CONF_ENTITY_ENABLED = "entity_enabled"
@@ -37,6 +40,8 @@ CONF_BLOCKED_SERVICE_PRESET = "blocked_service_preset"
 CONF_BLOCKED_SERVICE_TARGET = "blocked_service_target"
 CONF_QUICK_BLOCK_MINUTES = "quick_block_minutes"
 CONF_CONFIRM_BLOCK_ALL = "confirm_block_all"
+CONF_ACTIVITY_ENABLED = "activity_enabled"
+CONF_ACTIVITY_LIMIT = "activity_limit"
 
 AUDIENCE_EVERYONE = "everyone"
 AUDIENCE_CLIENT = "client"
@@ -65,3 +70,7 @@ STATE_REFRESH_INTERVAL_SECONDS = 60
 WRITE_DEBOUNCE_SECONDS = 1
 DEFAULT_QUICK_BLOCK_MINUTES = 60
 MAX_TEMPORARY_BLOCK_MINUTES = 10080
+DEFAULT_ACTIVITY_LIMIT = 200
+MIN_ACTIVITY_LIMIT = 25
+MAX_ACTIVITY_LIMIT = 500
+ACTIVITY_REFRESH_INTERVAL_SECONDS = 300
