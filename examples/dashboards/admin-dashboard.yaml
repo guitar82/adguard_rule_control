@@ -1,0 +1,131 @@
+# AdGuard Rule Control: detailed administrator dashboard
+# Replace every entity ID containing "replace_with_" before saving.
+views:
+  - title: Internet Admin
+    path: internet-admin
+    icon: mdi:shield-crown-outline
+    type: sections
+    max_columns: 4
+    sections:
+      - type: grid
+        title: System Status
+        cards:
+          - type: tile
+            entity: binary_sensor.replace_with_connected
+            name: AdGuard Connected
+            icon: mdi:lan-connect
+            color: green
+          - type: tile
+            entity: binary_sensor.replace_with_any_block_active
+            name: Any Block Active
+            icon: mdi:shield-lock
+            color: red
+          - type: tile
+            entity: sensor.replace_with_active_blocks
+            name: Active Blocks
+            icon: mdi:format-list-checks
+            state_content:
+              - state
+              - active_controls
+          - type: tile
+            entity: sensor.replace_with_next_automatic_change
+            name: Next Automatic Change
+            icon: mdi:clock-outline
+          - type: tile
+            entity: sensor.replace_with_last_sync
+            name: Last Sync
+            icon: mdi:sync-circle
+          - type: tile
+            entity: button.replace_with_sync
+            name: Sync Now
+            icon: mdi:sync
+            hide_state: true
+
+      - type: grid
+        title: Profiles
+        cards:
+          - type: tile
+            entity: switch.replace_with_bedtime_profile
+            name: Bedtime
+            icon: mdi:weather-night
+            color: indigo
+          - type: tile
+            entity: switch.replace_with_homework_profile
+            name: Homework
+            icon: mdi:book-open-variant
+            color: amber
+          - type: tile
+            entity: switch.replace_with_dinner_profile
+            name: Dinner
+            icon: mdi:silverware-fork-knife
+            color: green
+          - type: tile
+            entity: switch.replace_with_school_night_profile
+            name: School Night
+            icon: mdi:school
+            color: blue
+
+      - type: grid
+        title: Managed Controls
+        cards:
+          - type: tile
+            entity: switch.replace_with_block_all
+            name: Block All
+            icon: mdi:close-network-outline
+            color: red
+            icon_tap_action:
+              action: toggle
+              confirmation:
+                title: Change Block All?
+                text: This affects every target assigned to this control.
+          - type: tile
+            entity: switch.replace_with_youtube_control
+            name: YouTube
+            icon: mdi:youtube
+            color: red
+          - type: tile
+            entity: switch.replace_with_social_media_control
+            name: Social Media
+            icon: mdi:account-group
+            color: blue
+          - type: tile
+            entity: switch.replace_with_streaming_control
+            name: Streaming
+            icon: mdi:television-play
+            color: purple
+          - type: tile
+            entity: switch.replace_with_gaming_control
+            name: Gaming
+            icon: mdi:gamepad-variant
+            color: orange
+
+      - type: grid
+        title: Activity
+        cards:
+          - type: tile
+            entity: sensor.replace_with_blocked_requests_last_24_hours
+            name: Blocked Requests
+            icon: mdi:shield-check
+          - type: tile
+            entity: sensor.replace_with_last_blocked_request
+            name: Last Blocked Request
+            icon: mdi:clock-alert-outline
+
+      - type: grid
+        title: Emergency Recovery
+        cards:
+          - type: tile
+            entity: button.replace_with_allow_everything
+            name: Allow Everything
+            icon: mdi:shield-off-outline
+            color: green
+            hide_state: true
+            icon_tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.replace_with_allow_everything
+              confirmation:
+                title: Allow everything?
+                text: This will turn off every managed internet limit.
+                confirm_text: Allow

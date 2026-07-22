@@ -2,6 +2,16 @@
 
 AdGuard Rule Control is designed to work with Home Assistant's built-in Sections and Tile cards. No custom dashboard card is required.
 
+## Ready-to-Use Examples
+
+Three downloadable examples are included:
+
+- [Family dashboard](../examples/dashboards/family-dashboard.yaml) for shared status, routines, and controls grouped by person or device
+- [Mobile dashboard](../examples/dashboards/mobile-dashboard.yaml) for a compact phone-friendly layout
+- [Admin dashboard](../examples/dashboards/admin-dashboard.yaml) for connection details, activity, profiles, managed controls, and recovery actions
+
+See the [example installation guide](../examples/dashboards/README.md) for simple setup instructions. The examples use only Home Assistant's built-in Sections and Tile cards. Replace the clearly marked `replace_with_` entity IDs with entities from your AdGuard Rule Control devices.
+
 ## Recommended Layout
 
 Create a dashboard named **Internet Controls** with these sections.

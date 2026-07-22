@@ -1,0 +1,108 @@
+# AdGuard Rule Control: family dashboard
+# Replace every entity ID containing "replace_with_" before saving.
+views:
+  - title: Internet Controls
+    path: internet-controls
+    icon: mdi:shield-home
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        title: Internet Status
+        cards:
+          - type: tile
+            entity: binary_sensor.replace_with_any_block_active
+            name: Any Limits Active
+            icon: mdi:shield-lock
+            color: red
+          - type: tile
+            entity: sensor.replace_with_active_blocks
+            name: Active Limits
+            icon: mdi:format-list-checks
+          - type: tile
+            entity: sensor.replace_with_next_automatic_change
+            name: Next Change
+            icon: mdi:clock-outline
+
+      - type: grid
+        title: Family Routines
+        cards:
+          - type: tile
+            entity: switch.replace_with_bedtime_profile
+            name: Bedtime
+            icon: mdi:weather-night
+            color: indigo
+          - type: tile
+            entity: switch.replace_with_homework_profile
+            name: Homework
+            icon: mdi:book-open-variant
+            color: amber
+          - type: tile
+            entity: switch.replace_with_dinner_profile
+            name: Dinner
+            icon: mdi:silverware-fork-knife
+            color: green
+
+      - type: grid
+        title: Quick Actions
+        cards:
+          - type: tile
+            entity: button.replace_with_allow_everything
+            name: Allow Everything
+            icon: mdi:shield-off-outline
+            color: green
+            hide_state: true
+            icon_tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.replace_with_allow_everything
+              confirmation:
+                title: Allow everything?
+                text: This will turn off every managed internet limit.
+                confirm_text: Allow
+          - type: tile
+            entity: button.replace_with_sync
+            name: Refresh Status
+            icon: mdi:sync
+            hide_state: true
+
+      - type: grid
+        title: Child One
+        cards:
+          - type: tile
+            entity: switch.replace_with_child_one_youtube
+            name: YouTube
+            icon: mdi:youtube
+            color: red
+          - type: tile
+            entity: switch.replace_with_child_one_social_media
+            name: Social Media
+            icon: mdi:account-group
+            color: blue
+          - type: tile
+            entity: button.replace_with_child_one_quick_allow
+            name: Allow a Break
+            icon: mdi:timer-sand
+            color: green
+            hide_state: true
+
+      - type: grid
+        title: Child Two
+        cards:
+          - type: tile
+            entity: switch.replace_with_child_two_youtube
+            name: YouTube
+            icon: mdi:youtube
+            color: red
+          - type: tile
+            entity: switch.replace_with_child_two_streaming
+            name: Streaming
+            icon: mdi:television-play
+            color: purple
+          - type: tile
+            entity: button.replace_with_child_two_quick_allow
+            name: Allow a Break
+            icon: mdi:timer-sand
+            color: green
+            hide_state: true
