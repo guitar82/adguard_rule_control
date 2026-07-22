@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "adguard_rule_control"
 NAME = "AdGuard Rule Control"
-VERSION = "0.1.0-beta.6"
+VERSION = "0.1.0-beta.7"
 
 PLATFORMS = ["switch", "binary_sensor", "sensor", "button"]
 

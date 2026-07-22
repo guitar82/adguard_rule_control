@@ -5,11 +5,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant, ServiceCall
+
+    from .models import RuleControl
 
 from .const import DOMAIN
 
@@ -54,6 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryAuthFailed(str(err)) from err
     except (AdGuardConnectionError, AdGuardInvalidResponseError) as err:
         raise ConfigEntryNotReady(str(err)) from err
+    _async_remove_stale_entities(hass, entry, manager.controls)
     hass.data[DOMAIN][entry.entry_id] = manager
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _async_register_services(hass)
@@ -86,6 +91,33 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         except Exception as err:  # noqa: BLE001 - reload still preserves the saved options
             _LOGGER.warning("Unable to apply updated AdGuard controls before reload: %s", err)
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+@callback
+def _async_remove_stale_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    controls: list[RuleControl],
+) -> None:
+    """Remove registry entries for controls that no longer exist."""
+    desired = {
+        ("binary_sensor", f"{entry.entry_id}_connected"),
+        ("button", f"{entry.entry_id}_sync"),
+        ("sensor", f"{entry.entry_id}_last_sync"),
+        ("sensor", f"{entry.entry_id}_managed_rule_count"),
+    }
+    for control in controls:
+        if not control.entity_enabled:
+            continue
+        desired.add(("switch", f"{entry.entry_id}_{control.control_id}"))
+        desired.add(("button", f"{entry.entry_id}_{control.control_id}_quick_block"))
+
+    registry = er.async_get(hass)
+    for registry_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if registry_entry.platform != DOMAIN:
+            continue
+        if (registry_entry.domain, registry_entry.unique_id) not in desired:
+            registry.async_remove(registry_entry.entity_id)
 
 
 def _async_register_services(hass: HomeAssistant) -> None:
