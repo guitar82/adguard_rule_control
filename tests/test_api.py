@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -70,7 +69,7 @@ async def test_invalid_credentials() -> None:
 
 @pytest.mark.asyncio
 async def test_timeout() -> None:
-    client = AdGuardRuleControlClient(FakeSession([asyncio.TimeoutError()]), "http://adguard.local")
+    client = AdGuardRuleControlClient(FakeSession([TimeoutError()]), "http://adguard.local")
     with pytest.raises(AdGuardConnectionError):
         await client.async_test_connection()
 
@@ -151,6 +150,36 @@ async def test_get_clients_rejects_malformed_response() -> None:
     client = AdGuardRuleControlClient(FakeSession([FakeResponse(payload={"clients": {}})]), "http://adguard.local")
     with pytest.raises(AdGuardInvalidResponseError):
         await client.async_get_clients()
+
+
+@pytest.mark.asyncio
+async def test_get_client_configs_returns_only_persistent_clients() -> None:
+    persistent = {
+        "name": "Kid Tablet",
+        "ids": ["192.168.1.30"],
+        "use_global_blocked_services": True,
+        "blocked_services": [],
+    }
+    client = AdGuardRuleControlClient(
+        FakeSession([FakeResponse(payload={"clients": [persistent], "auto_clients": [{"name": "Phone"}]})]),
+        "http://adguard.local",
+    )
+    assert await client.async_get_client_configs() == [persistent]
+
+
+@pytest.mark.asyncio
+async def test_update_client_config_preserves_full_payload() -> None:
+    session = FakeSession([FakeResponse(payload=None)])
+    client = AdGuardRuleControlClient(session, "http://adguard.local")
+    data = {
+        "name": "Kid Tablet",
+        "ids": ["192.168.1.30"],
+        "use_global_blocked_services": False,
+        "blocked_services": ["youtube"],
+    }
+    await client.async_update_client_config("Kid Tablet", data)
+    assert session.requests[0][0] == "POST"
+    assert session.requests[0][2]["json"] == {"name": "Kid Tablet", "data": data}
 
 
 @pytest.mark.asyncio

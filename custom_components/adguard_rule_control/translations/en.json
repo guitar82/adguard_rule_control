@@ -3,12 +3,32 @@
     "step": {
       "user": {
         "title": "AdGuard Rule Control",
-        "description": "Connect to AdGuard Home. Examples: 192.168.1.10, 192.168.1.10:3000, https://adguard.example.com, or http://adguard.local:3000/control.",
+        "description": "Connect to AdGuard Home. Examples: 192.168.1.10, 192.168.1.10:3000, adguard.example.com, or adguard.local:3000/control.",
         "data": {
           "host": "Host or base URL",
           "port": "Port",
           "use_ssl": "Use SSL",
           "verify_ssl": "Verify SSL certificate",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "Update AdGuard Connection",
+        "description": "Change the AdGuard Home address, credentials, or SSL settings. The connection is tested before anything is saved.",
+        "data": {
+          "host": "Host or base URL",
+          "port": "Port",
+          "use_ssl": "Use SSL",
+          "verify_ssl": "Verify SSL certificate",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign In to AdGuard Again",
+        "description": "AdGuard rejected the saved credentials. Enter the current AdGuard Home username and password.",
+        "data": {
           "username": "Username",
           "password": "Password"
         }
@@ -21,7 +41,9 @@
       "invalid_url": "Enter a valid AdGuard Home URL."
     },
     "abort": {
-      "already_configured": "This AdGuard Home instance is already configured."
+      "already_configured": "This AdGuard Home instance is already configured.",
+      "reauth_successful": "AdGuard credentials were updated successfully.",
+      "reconfigure_successful": "The AdGuard connection was updated successfully."
     }
   },
   "options": {
@@ -39,12 +61,23 @@
         "data": {
           "display_name": "Switch name",
           "blocked_service_ids": "Blocked services",
+          "blocked_service_target": "Apply to",
+          "quick_block_minutes": "Quick block duration",
           "icon": "Icon"
         },
         "data_description": {
           "display_name": "This becomes the friendly name of the switch.",
           "blocked_service_ids": "Select one or more built-in AdGuard services.",
+          "blocked_service_target": "Choose everyone or one persistent client from AdGuard Home.",
+          "quick_block_minutes": "The dashboard button will block for this many minutes, then turn itself off.",
           "icon": "Optional Home Assistant icon, such as mdi:youtube or mdi:block-helper."
+        }
+      },
+      "blocked_service_preset": {
+        "title": "Choose a Service Group",
+        "description": "Start with a useful group or choose individual services. Only services supported by your AdGuard Home installation are saved.",
+        "data": {
+          "blocked_service_preset": "Service group"
         }
       },
       "preset": {
@@ -56,7 +89,7 @@
       },
       "website": {
         "title": "Block a Website",
-        "description": "Type a website name or paste a URL. Examples: youtube.com, roblox.com, https://www.reddit.com/r/popular. The integration will create the AdGuard rule for you.",
+        "description": "Type a website name or paste its address. Examples: youtube.com, roblox.com, or reddit.com. The integration will create the AdGuard rule for you.",
         "data": {
           "domain": "Website"
         }
@@ -134,6 +167,7 @@
           "target_type": "Target type",
           "target_name": "Target display name",
           "target_value": "Target identifier",
+          "quick_block_minutes": "Quick block duration",
           "icon": "Icon"
         },
         "data_description": {
@@ -143,14 +177,30 @@
           "target_type": "Global applies to everyone. Client-specific targets add AdGuard's client modifier automatically.",
           "target_name": "Optional friendly name shown in comments inside the managed rule block.",
           "target_value": "For client-specific controls, enter an IP address, MAC address, or AdGuard client name.",
+          "quick_block_minutes": "The dashboard button will enable this control for this many minutes.",
           "icon": "Optional Home Assistant icon, such as mdi:youtube or mdi:web-off."
+        }
+      },
+      "confirm_block_all": {
+        "title": "Confirm Block All Internet",
+        "description": "This rule targets everyone and can stop DNS access for every device using this AdGuard Home instance. Confirm only if that is intentional.",
+        "data": {
+          "confirm_block_all": "I understand this can block internet access for the whole network"
         }
       }
     },
     "error": {
       "invalid_rule": "Rule or client target is invalid.",
       "invalid_domain": "Enter a valid website domain, such as youtube.com.",
-      "no_controls": "Add a rule control first."
+      "no_controls": "Add a rule control first.",
+      "unsupported_service_group": "None of the services in that group are available from this AdGuard Home installation.",
+      "block_all_not_confirmed": "Confirmation is required before saving a network-wide Block All rule."
+    }
+  },
+  "issues": {
+    "managed_state_unavailable": {
+      "title": "AdGuard rule state needs attention",
+      "description": "AdGuard Rule Control could not safely read or update its managed state: {error}. Check the AdGuard connection, update AdGuard Home if its blocked-services API is unavailable, then use the Sync button."
     }
   }
 }

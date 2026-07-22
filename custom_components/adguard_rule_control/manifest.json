@@ -1,12 +1,12 @@
 {
   "domain": "adguard_rule_control",
   "name": "AdGuard Rule Control",
-  "codeowners": [],
+  "codeowners": ["@guitar82"],
   "config_flow": true,
   "documentation": "https://github.com/guitar82/adguard_rule_control",
   "integration_type": "service",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/guitar82/adguard_rule_control/issues",
   "requirements": [],
-  "version": "0.1.0-beta.5"
+  "version": "0.1.0-beta.6"
 }

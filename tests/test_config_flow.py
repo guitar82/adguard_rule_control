@@ -26,3 +26,12 @@ def test_remove_control_suffix() -> None:
 def test_invalid_url() -> None:
     with pytest.raises(ValueError):
         normalize_base_url("", None, False)
+
+
+def test_reject_credentials_embedded_in_url() -> None:
+    with pytest.raises(ValueError):
+        normalize_base_url("http://admin:secret@adguard.local:3000", None, False)
+
+
+def test_normalize_ipv6_url() -> None:
+    assert normalize_base_url("http://[fd00::10]:3000", None, False) == "http://[fd00::10]:3000"

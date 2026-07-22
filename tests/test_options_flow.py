@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from custom_components.adguard_rule_control.config_flow import OptionsFlowHandler, _find_control_index
 from custom_components.adguard_rule_control.const import TARGET_IPV4, TARGET_MAC
-from custom_components.adguard_rule_control.config_flow import _find_control_index
-from custom_components.adguard_rule_control.presets import PRESET_BLOCK_WEBSITE, PRESET_CUSTOM, get_preset, preset_choices
+from custom_components.adguard_rule_control.presets import (
+    PRESET_BLOCK_WEBSITE,
+    PRESET_CUSTOM,
+    blocked_service_preset_ids,
+    get_preset,
+    preset_choices,
+)
 from custom_components.adguard_rule_control.rule_builder import (
     RuleBuilderError,
     domain_to_block_rule,
@@ -90,3 +98,28 @@ def test_domain_to_block_rule_from_url() -> None:
 def test_domain_to_block_rule_rejects_ip() -> None:
     with pytest.raises(RuleBuilderError):
         domain_to_block_rule("192.168.1.1")
+
+
+def test_blocked_service_group_uses_only_available_ids() -> None:
+    assert blocked_service_preset_ids("social", {"facebook", "reddit", "youtube"}) == (
+        "facebook",
+        "reddit",
+    )
+
+
+@pytest.mark.asyncio
+async def test_blocked_service_review_back_returns_to_service_editor() -> None:
+    entry = type("Entry", (), {"options": {"controls": []}})()
+    handler = OptionsFlowHandler(entry)
+    handler._pending_control = {
+        "control_id": "one",
+        "display_name": "Block YouTube",
+        "kind": "blocked_services",
+        "rules": [],
+    }
+    handler.async_step_blocked_services = AsyncMock(return_value={"step": "blocked_services"})
+
+    result = await handler.async_step_review({"next": "back"})
+
+    assert result == {"step": "blocked_services"}
+    handler.async_step_blocked_services.assert_awaited_once()

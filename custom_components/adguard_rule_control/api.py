@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import logging
 from typing import Any
@@ -71,9 +70,7 @@ class AdGuardRuleControlClient:
 
     async def async_get_clients(self) -> list[dict[str, str]]:
         """Return selectable AdGuard clients and auto-clients."""
-        data = await self._async_request("GET", "control/clients")
-        if not isinstance(data, dict):
-            raise AdGuardInvalidResponseError("AdGuard returned an unexpected clients response")
+        data = await self._async_get_clients_payload()
 
         choices: list[dict[str, str]] = []
         clients = data.get("clients", [])
@@ -111,6 +108,30 @@ class AdGuardRuleControlClient:
 
         return _deduplicate_client_choices(choices)
 
+    async def async_get_client_configs(self) -> list[dict[str, Any]]:
+        """Return full persistent-client configurations."""
+        data = await self._async_get_clients_payload()
+        clients = data.get("clients", [])
+        if not isinstance(clients, list):
+            raise AdGuardInvalidResponseError("AdGuard clients response was malformed")
+        result: list[dict[str, Any]] = []
+        for client in clients:
+            if not isinstance(client, dict) or not str(client.get("name") or "").strip():
+                continue
+            result.append(dict(client))
+        return result
+
+    async def async_update_client_config(self, current_name: str, data: dict[str, Any]) -> None:
+        """Update one persistent AdGuard client while preserving its other fields."""
+        name = current_name.strip()
+        if not name or not isinstance(data, dict):
+            raise AdGuardInvalidResponseError("AdGuard client update data was invalid")
+        await self._async_request(
+            "POST",
+            "control/clients/update",
+            json={"name": name, "data": data},
+        )
+
     async def async_get_available_blocked_services(self) -> dict[str, str]:
         """Return available AdGuard blocked services as id -> display name."""
         try:
@@ -126,7 +147,11 @@ class AdGuardRuleControlClient:
                 elif isinstance(item, dict):
                     service_id = str(item.get("id") or item.get("name") or "").strip()
                     if service_id:
-                        services[service_id] = str(item.get("name") or item.get("display_name") or _humanize_service_id(service_id))
+                        services[service_id] = str(
+                            item.get("name")
+                            or item.get("display_name")
+                            or _humanize_service_id(service_id)
+                        )
             if services:
                 return services
         if isinstance(data, dict):
@@ -134,12 +159,15 @@ class AdGuardRuleControlClient:
             if isinstance(raw_services, list):
                 return {
                     str(item.get("id") or item.get("name")): str(
-                        item.get("name") or item.get("display_name") or _humanize_service_id(str(item.get("id") or item.get("name")))
+                        item.get("name")
+                        or item.get("display_name")
+                        or _humanize_service_id(str(item.get("id") or item.get("name")))
                     )
                     if isinstance(item, dict)
                     else _humanize_service_id(str(item))
                     for item in raw_services
-                    if (isinstance(item, str) and item) or (isinstance(item, dict) and (item.get("id") or item.get("name")))
+                    if (isinstance(item, str) and item)
+                    or (isinstance(item, dict) and (item.get("id") or item.get("name")))
                 }
         raise AdGuardInvalidResponseError("AdGuard returned an unexpected blocked services response")
 
@@ -173,6 +201,13 @@ class AdGuardRuleControlClient:
             raise AdGuardInvalidResponseError(str(err)) from err
         await self.async_set_user_rules(updated_rules)
 
+    async def _async_get_clients_payload(self) -> dict[str, Any]:
+        """Return and validate the common clients response payload."""
+        data = await self._async_request("GET", "control/clients")
+        if not isinstance(data, dict):
+            raise AdGuardInvalidResponseError("AdGuard returned an unexpected clients response")
+        return data
+
     async def _async_request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = urljoin(self._base_url, path)
         request_kwargs = {
@@ -194,7 +229,7 @@ class AdGuardRuleControlClient:
                     raise AdGuardInvalidResponseError("AdGuard returned invalid JSON") from err
         except AdGuardRuleControlError:
             raise
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             raise AdGuardConnectionError("Timed out connecting to AdGuard") from err
         except ClientResponseError as err:
             _LOGGER.debug("AdGuard API returned HTTP status %s", err.status)

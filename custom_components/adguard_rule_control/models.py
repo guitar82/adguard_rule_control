@@ -12,12 +12,14 @@ from .const import (
     CONF_ENTITY_ENABLED,
     CONF_ICON,
     CONF_KIND,
+    CONF_QUICK_BLOCK_MINUTES,
     CONF_RULES,
     CONF_TARGET,
     CONF_TARGET_NAME,
     CONF_TARGET_TYPE,
     CONF_TARGET_VALUE,
     CONTROL_KIND_RULES,
+    DEFAULT_QUICK_BLOCK_MINUTES,
     TARGET_GLOBAL,
 )
 
@@ -31,7 +33,7 @@ class ClientTarget:
     identifier_value: str
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "ClientTarget | None":
+    def from_dict(cls, data: dict[str, Any] | None) -> ClientTarget | None:
         """Create a target from stored options."""
         if not data:
             return None
@@ -65,9 +67,10 @@ class RuleControl:
     icon: str | None = None
     kind: str = CONTROL_KIND_RULES
     blocked_service_ids: tuple[str, ...] = ()
+    quick_block_minutes: int = DEFAULT_QUICK_BLOCK_MINUTES
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RuleControl":
+    def from_dict(cls, data: dict[str, Any]) -> RuleControl:
         """Create a control from config entry options."""
         return cls(
             control_id=data[CONF_CONTROL_ID],
@@ -78,6 +81,7 @@ class RuleControl:
             icon=data.get(CONF_ICON) or None,
             kind=data.get(CONF_KIND, CONTROL_KIND_RULES),
             blocked_service_ids=tuple(data.get(CONF_BLOCKED_SERVICE_IDS, [])),
+            quick_block_minutes=int(data.get(CONF_QUICK_BLOCK_MINUTES, DEFAULT_QUICK_BLOCK_MINUTES)),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -88,6 +92,7 @@ class RuleControl:
             CONF_RULES: list(self.rules),
             CONF_ENTITY_ENABLED: self.entity_enabled,
             CONF_KIND: self.kind,
+            CONF_QUICK_BLOCK_MINUTES: self.quick_block_minutes,
         }
         if self.blocked_service_ids:
             data[CONF_BLOCKED_SERVICE_IDS] = list(self.blocked_service_ids)

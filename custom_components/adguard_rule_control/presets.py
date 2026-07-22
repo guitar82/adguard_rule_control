@@ -4,9 +4,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 PRESET_CUSTOM = "custom"
 PRESET_BLOCK_WEBSITE = "block_website"
+
+BLOCKED_SERVICE_PRESET_CUSTOM = "custom"
+BLOCKED_SERVICE_PRESET_ALL = "all"
+
+BLOCKED_SERVICE_PRESETS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "social": (
+        "Social Media",
+        ("facebook", "instagram", "threads", "tiktok", "snapchat", "reddit", "twitter", "x", "pinterest"),
+    ),
+    "streaming": (
+        "Streaming Apps",
+        ("youtube", "netflix", "hulu", "disneyplus", "hbomax", "max", "primevideo", "twitch", "peacocktv"),
+    ),
+    "gaming": (
+        "Gaming Services",
+        ("steam", "epic_games", "xboxlive", "playstation", "nintendo", "roblox", "minecraft"),
+    ),
+    "messaging": (
+        "Messaging and Chat",
+        ("discord", "whatsapp", "telegram", "signal", "skype", "viber"),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -109,7 +130,9 @@ RULE_PRESETS: tuple[RulePreset, ...] = (
     RulePreset(
         key="streaming",
         name="Block Streaming Apps",
-        description="Blocks common video streaming services such as Netflix, Hulu, Disney+, Max, Prime Video, and Twitch.",
+        description=(
+            "Blocks common video streaming services such as Netflix, Hulu, Disney+, Max, Prime Video, and Twitch."
+        ),
         icon="mdi:television-play",
         rules=(
             "||netflix.com^",
@@ -131,7 +154,9 @@ RULE_PRESETS: tuple[RulePreset, ...] = (
     RulePreset(
         key="gaming",
         name="Block Gaming Services",
-        description="Blocks common gaming services such as Steam, Epic, Xbox, PlayStation, Nintendo, Roblox, and Minecraft.",
+        description=(
+            "Blocks common gaming services such as Steam, Epic, Xbox, PlayStation, Nintendo, Roblox, and Minecraft."
+        ),
         icon="mdi:gamepad-variant",
         rules=(
             "||steampowered.com^",
@@ -177,7 +202,9 @@ RULE_PRESETS: tuple[RulePreset, ...] = (
     RulePreset(
         key="adult",
         name="Block Adult Sites",
-        description="A simple starter preset for adult-site domains. Use a full blocklist in AdGuard for stronger coverage.",
+        description=(
+            "A simple starter preset for adult-site domains. Use a full blocklist in AdGuard for stronger coverage."
+        ),
         icon="mdi:shield-alert",
         rules=(
             "||pornhub.com^",
@@ -211,3 +238,31 @@ def preset_choices() -> dict[str, str]:
 def get_preset(key: str) -> RulePreset | None:
     """Return a preset by key."""
     return next((preset for preset in RULE_PRESETS if preset.key == key), None)
+
+
+def blocked_service_preset_choices() -> dict[str, str]:
+    """Return friendly blocked-service group choices."""
+    choices = {
+        BLOCKED_SERVICE_PRESET_CUSTOM: "Choose individual services",
+        BLOCKED_SERVICE_PRESET_ALL: "All services available in AdGuard",
+    }
+    choices.update({key: name for key, (name, _service_ids) in BLOCKED_SERVICE_PRESETS.items()})
+    return choices
+
+
+def blocked_service_preset_ids(key: str, available_ids: set[str]) -> tuple[str, ...]:
+    """Return supported service IDs for a friendly group."""
+    if key == BLOCKED_SERVICE_PRESET_ALL:
+        return tuple(sorted(available_ids))
+    preset = BLOCKED_SERVICE_PRESETS.get(key)
+    if preset is None:
+        return ()
+    return tuple(service_id for service_id in preset[1] if service_id in available_ids)
+
+
+def blocked_service_preset_name(key: str) -> str:
+    """Return a default display name for a blocked-service group."""
+    if key == BLOCKED_SERVICE_PRESET_ALL:
+        return "Block All Services"
+    preset = BLOCKED_SERVICE_PRESETS.get(key)
+    return f"Block {preset[0]}" if preset else "Block Services"

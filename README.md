@@ -19,7 +19,14 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Plain-English "block a website" builder
 - AdGuard client discovery for easier device selection
 - AdGuard blocked-services controls through the blocked-services API
+- Global or per-client AdGuard blocked-services controls
+- Dynamic Social, Streaming, Gaming, Messaging, and All Services groups
 - Everyone vs one-device setup wizard
+- One-click temporary block buttons with restart-safe automatic turn-off
+- `enable_for` action for custom temporary durations
+- Automatic state refresh when AdGuard is changed outside Home Assistant
+- Reconfigure and reauthentication flows for connection changes
+- Home Assistant repair alerts for managed-state problems
 - In-GUI setup instructions and custom rule examples
 - Duplicate and reorder rule controls
 - Optional multi-instance service targeting
@@ -27,13 +34,15 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Minimal diagnostics and services
 - HACS-ready repository structure
 
-This integration does not provide accounts, PINs, schedules, timers, dashboards, penalties, profiles, or parental-control logic. Use Home Assistant automations for timing and conditions.
+This integration does not provide accounts, PINs, penalties, profiles, or parental-control logic. Use Home Assistant automations for recurring schedules and conditions.
 
 ## Important Limitation
 
 DNS filtering can be bypassed by VPNs, cellular data, DNS over HTTPS, DNS over TLS, hardcoded DNS servers, cached DNS responses, or applications that connect directly to IP addresses. This integration is not a firewall and does not guarantee complete internet restriction.
 
 ## HACS Installation
+
+Requires Home Assistant 2025.1 or newer.
 
 1. Open HACS.
 2. Add `https://github.com/guitar82/adguard_rule_control` as a custom integration repository.
@@ -112,6 +121,7 @@ After choosing a preset, review or adjust:
 - Optional target display name
 - Optional target identifier
 - Optional icon
+- Quick block duration for the dashboard button
 
 Renaming a rule control keeps the same unique entity because entity identity is based on the internal control ID.
 
@@ -153,7 +163,7 @@ When applying a control to one device/client, the integration attempts to read c
 
 ## Blocked Services Controls
 
-AdGuard Home includes built-in blocked services. In Configure, choose **add_blocked_services** to query AdGuard for the available service list and create a switch that toggles one or more services.
+AdGuard Home includes built-in blocked services. In Configure, choose **add_blocked_services**, select a friendly group or individual services, then choose everyone or one persistent AdGuard client. The wizard creates one switch and one temporary-block button.
 
 These controls use:
 
@@ -161,9 +171,11 @@ These controls use:
 GET /control/blocked_services/all
 GET /control/blocked_services/get
 PUT /control/blocked_services/update
+GET /control/clients
+POST /control/clients/update
 ```
 
-The integration preserves blocked services that were enabled outside this integration. When a blocked-services switch turns off, it removes only the service IDs it previously managed.
+The integration preserves blocked services that were enabled outside this integration. When a blocked-services switch turns off, it removes only the service IDs it previously managed. For per-client controls, it also restores the client's previous global-services inheritance setting.
 
 ## Importing Existing State
 
@@ -225,6 +237,21 @@ Turning the switch on adds that control's rules to the managed block. Turning it
 
 That switch is the main entity you automate in Home Assistant. For example, a preset named **Block YouTube** will create a normal switch entity you can use in dashboards, scenes, scripts, and automations.
 
+Each control also creates a button named for its configured quick duration, such as **Block YouTube for 60 minutes**. Pressing it turns the switch on immediately and turns it back off after the deadline, even if Home Assistant restarts in between.
+
+## Dashboard Interface
+
+Setup and credentials stay in **Settings > Devices & services > AdGuard Rule Control > Configure** because Home Assistant dashboards cannot securely manage integration configuration.
+
+For everyday use, Home Assistant already groups every switch and temporary-block button under one **AdGuard Rule Control** device:
+
+1. Open a dashboard and choose **Edit dashboard**.
+2. Add an **Entities** or **Tile** card.
+3. Filter entities by the **AdGuard Rule Control** device.
+4. Add the switches for normal on/off control and the timer buttons for quick blocks.
+
+This creates a simple family-control dashboard without installing a separate custom card. Recurring bedtime or school schedules should use the same switch entities in Home Assistant's visual automation editor.
+
 ## Services
 
 Force a sync:
@@ -247,6 +274,15 @@ Disable a control:
 action: adguard_rule_control.disable
 data:
   control_id: control-uuid-or-id
+```
+
+Enable a control temporarily:
+
+```yaml
+action: adguard_rule_control.enable_for
+data:
+  control_id: control-uuid-or-id
+  minutes: 60
 ```
 
 Set a control state:
@@ -334,6 +370,7 @@ The integration creates:
 - `sensor.adguard_rule_control_managed_rule_count`
 - `sensor.adguard_rule_control_last_sync`
 - `button.adguard_rule_control_sync`
+- One temporary-block button for every configured control
 
 The last sanitized error is exposed as an entity attribute.
 
@@ -344,6 +381,8 @@ Each rule-control switch also exposes lightweight attributes:
 - `last_generated_checksum`
 - `last_successful_sync`
 - `last_error`
+- `target`
+- `temporary_until`
 
 ## Troubleshooting
 
@@ -352,6 +391,8 @@ Each rule-control switch also exposes lightweight attributes:
 - If using HTTPS with a self-signed certificate, disable certificate verification in the integration settings.
 - Confirm credentials can read and write custom filtering rules.
 - Check AdGuard custom filtering rules for incomplete or duplicated managed markers.
+- Check **Settings > System > Repairs** for an actionable AdGuard Rule Control warning.
+- Use **Reconfigure** on the integration to change its address, credentials, or SSL settings.
 - Remember that DNS clients may cache results after a rule changes.
 
 ## Removal
@@ -375,7 +416,11 @@ Run tests:
 pytest
 ```
 
-Run formatting and linting with your preferred Home Assistant development tooling.
+Run linting:
+
+```bash
+ruff check custom_components tests
+```
 
 ## License
 

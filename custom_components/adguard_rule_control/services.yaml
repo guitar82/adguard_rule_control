@@ -33,6 +33,28 @@ disable:
       selector:
         text:
 
+enable_for:
+  name: Enable temporarily
+  description: Enable a rule control for a limited number of minutes, including across Home Assistant restarts.
+  fields:
+    control_id:
+      required: true
+      selector:
+        text:
+    minutes:
+      required: true
+      example: 60
+      selector:
+        number:
+          min: 1
+          max: 10080
+          unit_of_measurement: minutes
+          mode: box
+    entry_id:
+      required: false
+      selector:
+        text:
+
 set_state:
   name: Set rule control state
   description: Set a rule control state by stable control ID.
