@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "AdGuard Rule Control",
-        "description": "Connect to AdGuard Home. Examples: 192.168.1.10, 192.168.1.10:3000, https://adguard.example.com, or http://adguard.local:3000/control.",
+        "description": "Connect to AdGuard Home. Examples: 192.168.1.10, 192.168.1.10:3000, adguard.example.com, or adguard.local:3000/control.",
         "data": {
           "host": "Host or base URL",
           "port": "Port",
@@ -89,7 +89,7 @@
       },
       "website": {
         "title": "Block a Website",
-        "description": "Type a website name or paste a URL. Examples: youtube.com, roblox.com, https://www.reddit.com/r/popular. The integration will create the AdGuard rule for you.",
+        "description": "Type a website name or paste its address. Examples: youtube.com, roblox.com, or reddit.com. The integration will create the AdGuard rule for you.",
         "data": {
           "domain": "Website"
         }
