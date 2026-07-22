@@ -1,0 +1,107 @@
+"""Tests for the AdGuard API client."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+from custom_components.adguard_rule_control.api import (
+    AdGuardAuthenticationError,
+    AdGuardConnectionError,
+    AdGuardInvalidResponseError,
+    AdGuardRuleControlClient,
+)
+
+
+class FakeResponse:
+    """Minimal aiohttp-like response."""
+
+    def __init__(self, status: int = 200, payload: Any = None) -> None:
+        self.status = status
+        self.payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def raise_for_status(self) -> None:
+        if self.status >= 400:
+            from aiohttp import ClientResponseError
+
+            raise ClientResponseError(None, (), status=self.status)
+
+    async def json(self) -> Any:
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+class FakeSession:
+    """Minimal aiohttp-like session."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        self.responses = responses
+        self.requests: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request(self, method: str, url: str, **kwargs: Any):
+        self.requests.append((method, url, kwargs))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+@pytest.mark.asyncio
+async def test_successful_connection() -> None:
+    client = AdGuardRuleControlClient(FakeSession([FakeResponse(payload={"user_rules": []})]), "http://adguard.local")
+    await client.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_invalid_credentials() -> None:
+    client = AdGuardRuleControlClient(FakeSession([FakeResponse(status=401)]), "http://adguard.local")
+    with pytest.raises(AdGuardAuthenticationError):
+        await client.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_timeout() -> None:
+    client = AdGuardRuleControlClient(FakeSession([asyncio.TimeoutError()]), "http://adguard.local")
+    with pytest.raises(AdGuardConnectionError):
+        await client.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_invalid_json() -> None:
+    from aiohttp.client_exceptions import ContentTypeError
+
+    client = AdGuardRuleControlClient(FakeSession([FakeResponse(payload=ContentTypeError(None, ()))]) , "http://adguard.local")
+    with pytest.raises(AdGuardInvalidResponseError):
+        await client.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_missing_user_rules() -> None:
+    client = AdGuardRuleControlClient(FakeSession([FakeResponse(payload={})]), "http://adguard.local")
+    with pytest.raises(AdGuardInvalidResponseError):
+        await client.async_test_connection()
+
+
+@pytest.mark.asyncio
+async def test_successful_rules_update() -> None:
+    session = FakeSession([FakeResponse(payload=None)])
+    client = AdGuardRuleControlClient(session, "http://adguard.local")
+    await client.async_set_user_rules(["||example.com^"])
+    assert session.requests[0][0] == "POST"
+    assert session.requests[0][2]["json"] == {"rules": ["||example.com^"]}
+
+
+@pytest.mark.asyncio
+async def test_failed_rules_update() -> None:
+    client = AdGuardRuleControlClient(FakeSession([FakeResponse(status=500)]), "http://adguard.local")
+    with pytest.raises(AdGuardConnectionError):
+        await client.async_set_user_rules(["||example.com^"])

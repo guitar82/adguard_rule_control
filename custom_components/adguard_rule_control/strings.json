@@ -1,0 +1,86 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AdGuard Rule Control",
+        "description": "Connect to AdGuard Home.",
+        "data": {
+          "host": "Host or base URL",
+          "port": "Port",
+          "use_ssl": "Use SSL",
+          "verify_ssl": "Verify SSL certificate",
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to AdGuard Home.",
+      "invalid_auth": "Invalid username or password.",
+      "invalid_response": "AdGuard Home returned an unexpected response.",
+      "invalid_url": "Enter a valid AdGuard Home URL."
+    },
+    "abort": {
+      "already_configured": "This AdGuard Home instance is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Rule controls",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "move": {
+        "title": "Move rule control",
+        "data": {
+          "control_id": "Rule control",
+          "direction": "Direction"
+        }
+      },
+      "preview": {
+        "title": "Preview generated rules",
+        "description": "{preview}",
+        "data": {
+          "next": "Next"
+        }
+      },
+      "import_state": {
+        "title": "Import current state",
+        "description": "{message}",
+        "data": {
+          "next": "Next"
+        }
+      },
+      "select_control": {
+        "title": "Edit rule control",
+        "data": {
+          "control_id": "Rule control"
+        }
+      },
+      "delete": {
+        "title": "Delete rule control",
+        "data": {
+          "control_id": "Rule control"
+        }
+      },
+      "control": {
+        "title": "Rule control",
+        "data": {
+          "display_name": "Display name",
+          "entity_enabled": "Create switch entity",
+          "rules": "Rules",
+          "target_type": "Target type",
+          "target_name": "Target display name",
+          "target_value": "Target identifier",
+          "icon": "Icon"
+        }
+      }
+    },
+    "error": {
+      "invalid_rule": "Rule or client target is invalid.",
+      "no_controls": "Add a rule control first."
+    }
+  }
+}

@@ -1,0 +1,26 @@
+[project]
+name = "adguard-rule-control"
+version = "0.1.0b1"
+description = "Home Assistant custom integration for AdGuard Home custom rule controls"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+test = [
+  "aiohttp",
+  "homeassistant",
+  "pytest",
+  "pytest-asyncio",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "BLE"]

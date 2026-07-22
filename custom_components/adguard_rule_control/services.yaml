@@ -1,0 +1,51 @@
+sync:
+  name: Sync
+  description: Rebuild and apply the managed AdGuard rule block.
+  fields:
+    entry_id:
+      required: false
+      selector:
+        text:
+
+enable:
+  name: Enable rule control
+  description: Enable a rule control by stable control ID.
+  fields:
+    control_id:
+      required: true
+      selector:
+        text:
+    entry_id:
+      required: false
+      selector:
+        text:
+
+disable:
+  name: Disable rule control
+  description: Disable a rule control by stable control ID.
+  fields:
+    control_id:
+      required: true
+      selector:
+        text:
+    entry_id:
+      required: false
+      selector:
+        text:
+
+set_state:
+  name: Set rule control state
+  description: Set a rule control state by stable control ID.
+  fields:
+    control_id:
+      required: true
+      selector:
+        text:
+    entry_id:
+      required: false
+      selector:
+        text:
+    enabled:
+      required: true
+      selector:
+        boolean:
