@@ -12,6 +12,8 @@ from .const import (
     CONF_ENTITY_ENABLED,
     CONF_ICON,
     CONF_KIND,
+    CONF_PROFILE_CONTROL_IDS,
+    CONF_PROFILE_ID,
     CONF_QUICK_BLOCK_MINUTES,
     CONF_RULES,
     CONF_TARGET,
@@ -98,6 +100,37 @@ class RuleControl:
             data[CONF_BLOCKED_SERVICE_IDS] = list(self.blocked_service_ids)
         if self.target:
             data[CONF_TARGET] = self.target.as_dict()
+        if self.icon:
+            data[CONF_ICON] = self.icon
+        return data
+
+
+@dataclass(frozen=True)
+class ControlProfile:
+    """A named group of existing rule controls."""
+
+    profile_id: str
+    display_name: str
+    control_ids: tuple[str, ...]
+    icon: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ControlProfile:
+        """Create a profile from config entry options."""
+        return cls(
+            profile_id=data[CONF_PROFILE_ID],
+            display_name=data[CONF_DISPLAY_NAME],
+            control_ids=tuple(data.get(CONF_PROFILE_CONTROL_IDS, [])),
+            icon=data.get(CONF_ICON) or None,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a storage-safe dictionary."""
+        data: dict[str, Any] = {
+            CONF_PROFILE_ID: self.profile_id,
+            CONF_DISPLAY_NAME: self.display_name,
+            CONF_PROFILE_CONTROL_IDS: list(self.control_ids),
+        }
         if self.icon:
             data[CONF_ICON] = self.icon
         return data

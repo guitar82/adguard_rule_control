@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin
 
@@ -201,6 +203,52 @@ class AdGuardRuleControlClient:
             raise AdGuardInvalidResponseError(str(err)) from err
         await self.async_set_user_rules(updated_rules)
 
+    async def async_get_blocked_activity(self, limit: int = 200) -> dict[str, Any]:
+        """Return privacy-conscious aggregates from recent blocked query-log rows."""
+        data = await self._async_request(
+            "GET",
+            "control/querylog",
+            params={"response_status": "blocked", "limit": limit},
+        )
+        rows = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            raise AdGuardInvalidResponseError("AdGuard query log response was malformed")
+
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
+        service_counts: Counter[str] = Counter()
+        client_counts: Counter[str] = Counter()
+        recent_count = 0
+        last_blocked: str | None = None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            event_time = _parse_query_time(row.get("time"))
+            if event_time is None or event_time < cutoff:
+                continue
+            recent_count += 1
+            if last_blocked is None or event_time.isoformat() > last_blocked:
+                last_blocked = event_time.isoformat()
+            service_name = str(row.get("service_name") or "").strip()
+            if service_name:
+                service_counts[service_name] += 1
+            client_info = row.get("client_info")
+            client_name = (
+                str(client_info.get("name") or "").strip()
+                if isinstance(client_info, dict)
+                else ""
+            )
+            client_name = client_name or str(row.get("client") or "Unknown client").strip()
+            client_counts[client_name] += 1
+
+        return {
+            "blocked_last_24_hours": recent_count,
+            "last_blocked": last_blocked,
+            "sample_limit": limit,
+            "sample_truncated": len(rows) >= limit,
+            "top_services": dict(service_counts.most_common(5)),
+            "top_clients": dict(client_counts.most_common(5)),
+        }
+
     async def _async_get_clients_payload(self) -> dict[str, Any]:
         """Return and validate the common clients response payload."""
         data = await self._async_request("GET", "control/clients")
@@ -278,3 +326,16 @@ def _deduplicate_client_choices(choices: list[dict[str, str]]) -> list[dict[str,
 def _humanize_service_id(service_id: str) -> str:
     """Return a readable blocked service name from an AdGuard service ID."""
     return service_id.replace("_", " ").replace("-", " ").title()
+
+
+def _parse_query_time(value: Any) -> datetime | None:
+    """Parse an AdGuard query-log timestamp as UTC."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

@@ -1,0 +1,47 @@
+blueprint:
+  name: AdGuard Rule Control schedule
+  description: Turn one or more AdGuard Rule Control switches on during a Home Assistant schedule and off when it ends.
+  domain: automation
+  input:
+    schedule_entity:
+      name: Schedule
+      description: Choose a Home Assistant Schedule helper.
+      selector:
+        entity:
+          domain: schedule
+    control_switches:
+      name: Rule controls or profiles
+      description: Choose the AdGuard rule-control and profile switches this schedule should manage.
+      selector:
+        target:
+          entity:
+            domain: switch
+
+triggers:
+  - trigger: state
+    entity_id: !input schedule_entity
+    to: "on"
+    id: started
+  - trigger: state
+    entity_id: !input schedule_entity
+    to: "off"
+    id: ended
+
+conditions: []
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: started
+        sequence:
+          - action: switch.turn_on
+            target: !input control_switches
+      - conditions:
+          - condition: trigger
+            id: ended
+        sequence:
+          - action: switch.turn_off
+            target: !input control_switches
+
+mode: restart

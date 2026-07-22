@@ -22,8 +22,13 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Global or per-client AdGuard blocked-services controls
 - Dynamic Social, Streaming, Gaming, Messaging, and All Services groups
 - Everyone vs one-device setup wizard
-- One-click temporary block buttons with restart-safe automatic turn-off
-- `enable_for` action for custom temporary durations
+- One-click temporary block and temporary allow buttons with restart-safe restoration
+- `enable_for` and `disable_for` actions for custom temporary durations
+- Bedtime, Homework, Dinner, and other user-defined control profiles
+- Per-client Home Assistant devices for easier dashboard grouping
+- Active-block count, next-change time, and Allow Everything dashboard controls
+- Optional privacy-conscious blocked-activity aggregates
+- Native Home Assistant dashboard guide and Schedule helper blueprint
 - Automatic state refresh when AdGuard is changed outside Home Assistant
 - Reconfigure and reauthentication flows for connection changes
 - Home Assistant repair alerts for managed-state problems
@@ -34,7 +39,7 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Minimal diagnostics and services
 - HACS-ready repository structure
 
-This integration does not provide accounts, PINs, penalties, profiles, or parental-control logic. Use Home Assistant automations for recurring schedules and conditions.
+This integration does not provide accounts, PINs, penalties, or a second scheduling engine. Use Home Assistant users, dashboard visibility, Schedule helpers, and automations for those responsibilities.
 
 ## Important Limitation
 
@@ -237,20 +242,20 @@ Turning the switch on adds that control's rules to the managed block. Turning it
 
 That switch is the main entity you automate in Home Assistant. For example, a preset named **Block YouTube** will create a normal switch entity you can use in dashboards, scenes, scripts, and automations.
 
-Each control also creates a button named for its configured quick duration, such as **Block YouTube for 60 minutes**. Pressing it turns the switch on immediately and turns it back off after the deadline, even if Home Assistant restarts in between.
+Each control also creates temporary block and temporary allow buttons using its configured quick duration. The integration restores the previous state after the deadline, even if Home Assistant restarts in between.
 
 ## Dashboard Interface
 
 Setup and credentials stay in **Settings > Devices & services > AdGuard Rule Control > Configure** because Home Assistant dashboards cannot securely manage integration configuration.
 
-For everyday use, Home Assistant already groups every switch and temporary-block button under one **AdGuard Rule Control** device:
+For everyday use, global controls and profiles remain on the main **AdGuard Rule Control** device. Client-specific controls are grouped into devices such as **Kid Tablet Internet Controls**:
 
 1. Open a dashboard and choose **Edit dashboard**.
 2. Add an **Entities** or **Tile** card.
-3. Filter entities by the **AdGuard Rule Control** device.
-4. Add the switches for normal on/off control and the timer buttons for quick blocks.
+3. Choose the main device or one client Internet Controls device.
+4. Add switches, profile switches, temporary block buttons, and temporary allow buttons.
 
-This creates a simple family-control dashboard without installing a separate custom card. Recurring bedtime or school schedules should use the same switch entities in Home Assistant's visual automation editor.
+The main device also provides Any Block Active, Active Blocks, Next Automatic Change, Allow Everything, connectivity, and sync entities. See [the native dashboard guide](docs/DASHBOARD.md) for the recommended Sections layout, safety confirmations, activity sensors, and included Schedule helper blueprint.
 
 ## Services
 
@@ -283,6 +288,30 @@ action: adguard_rule_control.enable_for
 data:
   control_id: control-uuid-or-id
   minutes: 60
+```
+
+Allow a control temporarily, then restore its previous blocked state:
+
+```yaml
+action: adguard_rule_control.disable_for
+data:
+  control_id: control-uuid-or-id
+  minutes: 60
+```
+
+Allow everything managed by this integration:
+
+```yaml
+action: adguard_rule_control.disable_all
+```
+
+Set a configured profile state:
+
+```yaml
+action: adguard_rule_control.set_profile_state
+data:
+  profile_id: profile-uuid-or-id
+  enabled: true
 ```
 
 Set a control state:
@@ -367,10 +396,17 @@ If markers are malformed, duplicated, nested, or incomplete, the integration ref
 The integration creates:
 
 - `binary_sensor.adguard_rule_control_connected`
+- `binary_sensor.adguard_rule_control_any_block_active`
+- `sensor.adguard_rule_control_active_blocks`
+- `sensor.adguard_rule_control_next_automatic_change`
 - `sensor.adguard_rule_control_managed_rule_count`
 - `sensor.adguard_rule_control_last_sync`
 - `button.adguard_rule_control_sync`
-- One temporary-block button for every configured control
+- `button.adguard_rule_control_allow_everything`
+- One temporary-block and one temporary-allow button for every configured control
+- One switch for every configured profile
+
+When optional activity is enabled, it also creates blocked-request and last-blocked timestamp sensors. Requested domains and raw query-log rows are not retained.
 
 The last sanitized error is exposed as an entity attribute.
 
@@ -383,6 +419,7 @@ Each rule-control switch also exposes lightweight attributes:
 - `last_error`
 - `target`
 - `temporary_until`
+- `temporary_mode`
 
 ## Troubleshooting
 

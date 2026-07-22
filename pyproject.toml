@@ -1,6 +1,6 @@
 [project]
 name = "adguard-rule-control"
-version = "0.1.0b7"
+version = "0.1.0b8"
 description = "Home Assistant custom integration for AdGuard Home custom rule controls"
 readme = "README.md"
 requires-python = ">=3.12"
