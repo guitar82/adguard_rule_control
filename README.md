@@ -18,6 +18,7 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Block-all preset for carefully targeted device controls
 - Plain-English "block a website" builder
 - AdGuard client discovery for easier device selection
+- AdGuard blocked-services controls through the blocked-services API
 - Everyone vs one-device setup wizard
 - In-GUI setup instructions and custom rule examples
 - Duplicate and reorder rule controls
@@ -122,6 +123,7 @@ The Configure flow also supports:
 - Move a rule control up or down in the managed block order
 - Preview the generated managed rules for a control
 - Import current enabled states from an existing AdGuard managed block
+- Add a blocked-services control using AdGuard's built-in service list
 
 The preview step uses the same generator as the live switch path, so it shows the actual rules that would be written between this integration's markers.
 
@@ -148,6 +150,20 @@ When applying a control to one device/client, the integration attempts to read c
 - IPv6 address
 - MAC address
 - Exact AdGuard client name
+
+## Blocked Services Controls
+
+AdGuard Home includes built-in blocked services. In Configure, choose **add_blocked_services** to query AdGuard for the available service list and create a switch that toggles one or more services.
+
+These controls use:
+
+```text
+GET /control/blocked_services/all
+GET /control/blocked_services/get
+PUT /control/blocked_services/update
+```
+
+The integration preserves blocked services that were enabled outside this integration. When a blocked-services switch turns off, it removes only the service IDs it previously managed.
 
 ## Importing Existing State
 

@@ -111,6 +111,59 @@ class AdGuardRuleControlClient:
 
         return _deduplicate_client_choices(choices)
 
+    async def async_get_available_blocked_services(self) -> dict[str, str]:
+        """Return available AdGuard blocked services as id -> display name."""
+        try:
+            data = await self._async_request("GET", "control/blocked_services/all")
+        except AdGuardConnectionError:
+            data = await self._async_request("GET", "control/blocked_services/services")
+
+        if isinstance(data, list):
+            services: dict[str, str] = {}
+            for item in data:
+                if isinstance(item, str):
+                    services[item] = _humanize_service_id(item)
+                elif isinstance(item, dict):
+                    service_id = str(item.get("id") or item.get("name") or "").strip()
+                    if service_id:
+                        services[service_id] = str(item.get("name") or item.get("display_name") or _humanize_service_id(service_id))
+            if services:
+                return services
+        if isinstance(data, dict):
+            raw_services = data.get("services") or data.get("blocked_services") or data.get("ids")
+            if isinstance(raw_services, list):
+                return {
+                    str(item.get("id") or item.get("name")): str(
+                        item.get("name") or item.get("display_name") or _humanize_service_id(str(item.get("id") or item.get("name")))
+                    )
+                    if isinstance(item, dict)
+                    else _humanize_service_id(str(item))
+                    for item in raw_services
+                    if (isinstance(item, str) and item) or (isinstance(item, dict) and (item.get("id") or item.get("name")))
+                }
+        raise AdGuardInvalidResponseError("AdGuard returned an unexpected blocked services response")
+
+    async def async_get_blocked_services_config(self) -> dict[str, Any]:
+        """Return current global blocked services config."""
+        data = await self._async_request("GET", "control/blocked_services/get")
+        if not isinstance(data, dict):
+            raise AdGuardInvalidResponseError("AdGuard returned an unexpected blocked services config")
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(service_id, str) for service_id in ids):
+            raise AdGuardInvalidResponseError("AdGuard blocked services config did not include ids")
+        schedule = data.get("schedule", {})
+        if not isinstance(schedule, dict):
+            raise AdGuardInvalidResponseError("AdGuard blocked services schedule was malformed")
+        return {"ids": ids, "schedule": schedule}
+
+    async def async_update_blocked_services_config(self, ids: list[str], schedule: dict[str, Any]) -> None:
+        """Update current global blocked services config."""
+        await self._async_request(
+            "PUT",
+            "control/blocked_services/update",
+            json={"ids": ids, "schedule": schedule},
+        )
+
     async def async_replace_managed_rules(self, managed_rules: list[str]) -> None:
         """Replace only this integration's managed rule block."""
         existing_rules = await self.async_get_user_rules()
@@ -133,7 +186,7 @@ class AdGuardRuleControlClient:
                 if response.status in (401, 403):
                     raise AdGuardAuthenticationError("AdGuard authentication failed")
                 response.raise_for_status()
-                if method == "POST":
+                if method in {"POST", "PUT"}:
                     return None
                 try:
                     return await response.json()
@@ -185,3 +238,8 @@ def _deduplicate_client_choices(choices: list[dict[str, str]]) -> list[dict[str,
         seen.add(key)
         result.append(choice)
     return result
+
+
+def _humanize_service_id(service_id: str) -> str:
+    """Return a readable blocked service name from an AdGuard service ID."""
+    return service_id.replace("_", " ").replace("-", " ").title()

@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import (
@@ -23,6 +24,7 @@ from .const import (
     CLIENT_CHOICE_MANUAL,
     CONF_AUDIENCE,
     CONF_BASE_URL,
+    CONF_BLOCKED_SERVICE_IDS,
     CONF_CLIENT_CHOICE,
     CONF_CONTROL_ID,
     CONF_CONTROLS,
@@ -31,6 +33,7 @@ from .const import (
     CONF_ENTITY_ENABLED,
     CONF_HOST,
     CONF_ICON,
+    CONF_KIND,
     CONF_PORT,
     CONF_PRESET,
     CONF_RULES,
@@ -40,6 +43,8 @@ from .const import (
     CONF_TARGET_VALUE,
     CONF_USE_SSL,
     CONF_VERIFY_SSL,
+    CONTROL_KIND_BLOCKED_SERVICES,
+    CONTROL_KIND_RULES,
     DOMAIN,
     MAX_PREVIEW_LINES,
     NAME,
@@ -161,6 +166,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             action = user_input["action"]
             if action == "add":
                 return await self.async_step_preset()
+            if action == "add_blocked_services":
+                return await self.async_step_blocked_services()
             if action in {"edit", "duplicate", "preview"}:
                 if not self._controls:
                     errors["base"] = "no_controls"
@@ -186,8 +193,57 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required("action", default="add"): vol.In(
-                        ["add", "edit", "duplicate", "delete", "move", "preview", "import_state", "finish"]
+                        [
+                            "add",
+                            "add_blocked_services",
+                            "edit",
+                            "duplicate",
+                            "delete",
+                            "move",
+                            "preview",
+                            "import_state",
+                            "finish",
+                        ]
                     )
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_blocked_services(self, user_input: dict[str, Any] | None = None):
+        """Add a control for AdGuard's built-in blocked services."""
+        errors: dict[str, str] = {}
+        services = await self._async_blocked_service_choices()
+        current = self._controls[self._edit_index] if self._edit_index is not None else {}
+        if user_input is not None:
+            service_ids = tuple(user_input[CONF_BLOCKED_SERVICE_IDS])
+            try:
+                display_name = validate_comment_label(user_input[CONF_DISPLAY_NAME], "Display name")
+                if not service_ids:
+                    raise RuleBuilderError("Select at least one blocked service")
+            except RuleBuilderError:
+                errors["base"] = "invalid_rule"
+            else:
+                self._pending_control = RuleControl(
+                    control_id=current.get(CONF_CONTROL_ID) or str(uuid.uuid4()),
+                    display_name=display_name,
+                    rules=(),
+                    entity_enabled=True,
+                    icon=user_input.get(CONF_ICON) or "mdi:block-helper",
+                    kind=CONTROL_KIND_BLOCKED_SERVICES,
+                    blocked_service_ids=service_ids,
+                ).as_dict()
+                return await self.async_step_review()
+        return self.async_show_form(
+            step_id="blocked_services",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_DISPLAY_NAME, default=current.get(CONF_DISPLAY_NAME, "Block Services")): str,
+                    vol.Required(
+                        CONF_BLOCKED_SERVICE_IDS,
+                        default=list(current.get(CONF_BLOCKED_SERVICE_IDS, [])),
+                    ): cv.multi_select(services),
+                    vol.Optional(CONF_ICON, default=current.get(CONF_ICON, "mdi:block-helper")): str,
                 }
             ),
             errors=errors,
@@ -335,6 +391,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 return self._save()
             if self._select_action == "preview":
                 return await self.async_step_preview()
+            if self._controls[self._edit_index].get(CONF_KIND) == CONTROL_KIND_BLOCKED_SERVICES:
+                return await self.async_step_blocked_services()
             return await self.async_step_control()
         return self.async_show_form(
             step_id="select_control",
@@ -449,6 +507,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     entity_enabled=user_input[CONF_ENTITY_ENABLED],
                     target=ClientTarget.from_dict(target),
                     icon=user_input.get(CONF_ICON) or None,
+                    kind=current.get(CONF_KIND, CONTROL_KIND_RULES),
                 ).as_dict()
             except RuleBuilderError:
                 errors["base"] = "invalid_rule"
@@ -489,24 +548,56 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return self._save()
 
         control = RuleControl.from_dict(self._pending_control)
-        lines = preview_control(control)
-        extra = len(lines) - MAX_PREVIEW_LINES
-        preview_lines = lines[:MAX_PREVIEW_LINES]
-        if extra > 0:
-            preview_lines.append(f"... {extra} more lines")
-        preview = "\n".join(preview_lines) or "No rules would be generated."
+        if control.kind == CONTROL_KIND_BLOCKED_SERVICES:
+            lines = [f"Blocked service: {service_id}" for service_id in control.blocked_service_ids]
+            preview = "\n".join(lines) or "No blocked services selected."
+            rule_count = len(control.blocked_service_ids)
+        else:
+            lines = preview_control(control)
+            extra = len(lines) - MAX_PREVIEW_LINES
+            preview_lines = lines[:MAX_PREVIEW_LINES]
+            if extra > 0:
+                preview_lines.append(f"... {extra} more lines")
+            preview = "\n".join(preview_lines) or "No rules would be generated."
+            rule_count = len([line for line in lines if line and not line.startswith("!")])
         return self.async_show_form(
             step_id="review",
             data_schema=vol.Schema({vol.Required("next", default="save"): vol.In(["save", "back"])}),
             description_placeholders={
                 "entity_id": f"switch.adguard_rule_control_{_slugify_entity_id(control.display_name)}",
-                "rule_count": str(len([line for line in lines if line and not line.startswith("!")])),
+                "rule_count": str(rule_count),
                 "preview": preview,
             },
         )
 
     def _save(self):
         return self.async_create_entry(title="", data={CONF_CONTROLS: self._controls})
+
+    async def _async_blocked_service_choices(self) -> dict[str, str]:
+        """Return available blocked service choices."""
+        manager = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id)
+        if manager is not None:
+            try:
+                services = await manager.client.async_get_available_blocked_services()
+            except Exception:  # noqa: BLE001 - keep setup usable with fallback choices
+                services = {}
+            if services:
+                return services
+        return {
+            "youtube": "YouTube",
+            "facebook": "Facebook",
+            "instagram": "Instagram",
+            "tiktok": "TikTok",
+            "snapchat": "Snapchat",
+            "discord": "Discord",
+            "reddit": "Reddit",
+            "netflix": "Netflix",
+            "twitch": "Twitch",
+            "steam": "Steam",
+            "epic_games": "Epic Games",
+            "roblox": "Roblox",
+            "onlyfans": "OnlyFans",
+        }
 
 
 def _control_choices(controls: list[dict[str, Any]]) -> dict[str, str]:

@@ -23,6 +23,8 @@ from .api import (
 from .const import (
     CONF_CONTROLS,
     CONNECTION_CHECK_INTERVAL_SECONDS,
+    CONTROL_KIND_BLOCKED_SERVICES,
+    CONTROL_KIND_RULES,
     DOMAIN,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
@@ -50,6 +52,7 @@ class AdGuardRuleControlManager:
         self.last_checksum: str | None = None
         self.managed_rule_count = 0
         self.control_status: dict[str, dict[str, Any]] = {}
+        self.last_managed_blocked_service_ids: set[str] = set()
 
     @property
     def controls(self) -> list[RuleControl]:
@@ -68,6 +71,7 @@ class AdGuardRuleControlManager:
         self.last_sync = data.get("last_sync")
         self.last_checksum = data.get("last_checksum")
         self.control_status = data.get("control_status", {})
+        self.last_managed_blocked_service_ids = set(data.get("last_managed_blocked_service_ids", []))
         for control in self.controls:
             self.states.setdefault(control.control_id, False)
             self.control_status.setdefault(control.control_id, self._status_for_control(control, False))
@@ -139,9 +143,21 @@ class AdGuardRuleControlManager:
         """Import enabled states by reading the current managed block from AdGuard."""
         async with self._lock:
             existing_rules = await self.client.async_get_user_rules()
-            active_ids = infer_active_control_ids(existing_rules, self.controls)
-            for control in self.controls:
-                self.states[control.control_id] = control.control_id in active_ids
+            blocked_config = await self.client.async_get_blocked_services_config()
+            blocked_ids = set(blocked_config["ids"])
+            controls = self.controls
+            active_ids = infer_active_control_ids(
+                existing_rules,
+                [control for control in controls if control.kind == CONTROL_KIND_RULES],
+            )
+            for control in controls:
+                if control.kind == CONTROL_KIND_BLOCKED_SERVICES:
+                    is_active = bool(control.blocked_service_ids) and set(control.blocked_service_ids).issubset(blocked_ids)
+                    self.states[control.control_id] = is_active
+                    if is_active:
+                        active_ids.add(control.control_id)
+                else:
+                    self.states[control.control_id] = control.control_id in active_ids
                 self.control_status[control.control_id] = self._status_for_control(
                     control,
                     self.states[control.control_id],
@@ -156,9 +172,13 @@ class AdGuardRuleControlManager:
         """Rebuild and apply the managed rule block."""
         async with self._lock:
             controls = self.controls
-            active_controls = [control for control in controls if self.states.get(control.control_id, False)]
+            rule_controls = [control for control in controls if control.kind == CONTROL_KIND_RULES]
+            service_controls = [control for control in controls if control.kind == CONTROL_KIND_BLOCKED_SERVICES]
+            active_controls = [control for control in rule_controls if self.states.get(control.control_id, False)]
             managed_rules = build_managed_block(active_controls)
             await self.client.async_replace_managed_rules(managed_rules)
+            if service_controls or self.last_managed_blocked_service_ids:
+                await self._async_sync_blocked_services(service_controls)
             self.connected = True
             self.last_error = None
             self.last_sync = dt_util.utcnow().isoformat()
@@ -177,14 +197,32 @@ class AdGuardRuleControlManager:
 
     def _status_for_control(self, control: RuleControl, active: bool) -> dict[str, Any]:
         """Build per-control status metadata."""
-        generated_rules = generate_rules_for_control(control)
-        checksum = hashlib.sha256(json.dumps(generated_rules, sort_keys=True).encode()).hexdigest()
+        generated_rules = generate_rules_for_control(control) if control.kind == CONTROL_KIND_RULES else []
+        managed_items = list(generated_rules or control.blocked_service_ids)
+        checksum = hashlib.sha256(json.dumps(managed_items, sort_keys=True).encode()).hexdigest()
         return {
             "active": active,
+            "kind": control.kind,
             "generated_rule_count": len(generated_rules),
+            "blocked_service_count": len(control.blocked_service_ids),
             "last_generated_checksum": checksum,
             "last_successful_sync": self.last_sync if active else None,
         }
+
+    async def _async_sync_blocked_services(self, service_controls: list[RuleControl]) -> None:
+        """Synchronize global AdGuard blocked services while preserving unrelated services."""
+        config = await self.client.async_get_blocked_services_config()
+        current_ids = set(config["ids"])
+        active_ids = {
+            service_id
+            for control in service_controls
+            if self.states.get(control.control_id, False)
+            for service_id in control.blocked_service_ids
+        }
+        next_ids = sorted((current_ids - self.last_managed_blocked_service_ids) | active_ids)
+        if set(config["ids"]) != set(next_ids):
+            await self.client.async_update_blocked_services_config(next_ids, config["schedule"])
+        self.last_managed_blocked_service_ids = set(active_ids)
 
     async def _async_save_state(self) -> None:
         """Persist runtime state."""
@@ -194,6 +232,7 @@ class AdGuardRuleControlManager:
                 "last_sync": self.last_sync,
                 "last_checksum": self.last_checksum,
                 "control_status": self.control_status,
+                "last_managed_blocked_service_ids": sorted(self.last_managed_blocked_service_ids),
             }
         )
 

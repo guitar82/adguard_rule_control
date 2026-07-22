@@ -28,9 +28,23 @@
     "step": {
       "init": {
         "title": "Rule controls",
-        "description": "Add creates a switch entity you can use in dashboards, scripts, scenes, and automations. Use preview to see the exact AdGuard rules before enabling a switch.",
+        "description": "Add creates a switch entity you can use in dashboards, scripts, scenes, and automations. Use presets for custom rules, or add blocked services to control AdGuard's built-in service blocks.",
         "data": {
           "action": "Action"
+        }
+      },
+      "blocked_services": {
+        "title": "Add Blocked Services Control",
+        "description": "Choose AdGuard's built-in blocked services, such as YouTube, TikTok, Discord, or gaming services. This creates one Home Assistant switch that toggles those services through AdGuard's blocked-services API.",
+        "data": {
+          "display_name": "Switch name",
+          "blocked_service_ids": "Blocked services",
+          "icon": "Icon"
+        },
+        "data_description": {
+          "display_name": "This becomes the friendly name of the switch.",
+          "blocked_service_ids": "Select one or more built-in AdGuard services.",
+          "icon": "Optional Home Assistant icon, such as mdi:youtube or mdi:block-helper."
         }
       },
       "preset": {
@@ -72,7 +86,7 @@
       },
       "review": {
         "title": "Review and Save",
-        "description": "This will create or update {entity_id}. When the switch is turned on, AdGuard Rule Control will write {rule_count} managed rule(s):\n\n{preview}",
+        "description": "This will create or update {entity_id}. When the switch is turned on, AdGuard Rule Control will manage {rule_count} item(s):\n\n{preview}",
         "data": {
           "next": "Next"
         }

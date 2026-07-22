@@ -6,15 +6,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from .const import (
+    CONF_BLOCKED_SERVICE_IDS,
     CONF_CONTROL_ID,
     CONF_DISPLAY_NAME,
     CONF_ENTITY_ENABLED,
     CONF_ICON,
+    CONF_KIND,
     CONF_RULES,
     CONF_TARGET,
     CONF_TARGET_NAME,
     CONF_TARGET_TYPE,
     CONF_TARGET_VALUE,
+    CONTROL_KIND_RULES,
     TARGET_GLOBAL,
 )
 
@@ -60,6 +63,8 @@ class RuleControl:
     entity_enabled: bool = True
     target: ClientTarget | None = None
     icon: str | None = None
+    kind: str = CONTROL_KIND_RULES
+    blocked_service_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RuleControl":
@@ -71,6 +76,8 @@ class RuleControl:
             entity_enabled=data.get(CONF_ENTITY_ENABLED, True),
             target=ClientTarget.from_dict(data.get(CONF_TARGET)),
             icon=data.get(CONF_ICON) or None,
+            kind=data.get(CONF_KIND, CONTROL_KIND_RULES),
+            blocked_service_ids=tuple(data.get(CONF_BLOCKED_SERVICE_IDS, [])),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -80,7 +87,10 @@ class RuleControl:
             CONF_DISPLAY_NAME: self.display_name,
             CONF_RULES: list(self.rules),
             CONF_ENTITY_ENABLED: self.entity_enabled,
+            CONF_KIND: self.kind,
         }
+        if self.blocked_service_ids:
+            data[CONF_BLOCKED_SERVICE_IDS] = list(self.blocked_service_ids)
         if self.target:
             data[CONF_TARGET] = self.target.as_dict()
         if self.icon:

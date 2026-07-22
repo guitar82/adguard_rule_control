@@ -151,3 +151,57 @@ async def test_get_clients_rejects_malformed_response() -> None:
     client = AdGuardRuleControlClient(FakeSession([FakeResponse(payload={"clients": {}})]), "http://adguard.local")
     with pytest.raises(AdGuardInvalidResponseError):
         await client.async_get_clients()
+
+
+@pytest.mark.asyncio
+async def test_get_available_blocked_services_from_all() -> None:
+    client = AdGuardRuleControlClient(
+        FakeSession(
+            [
+                FakeResponse(
+                    payload=[
+                        {"id": "youtube", "name": "YouTube"},
+                        {"id": "epic_games", "name": "Epic Games"},
+                    ]
+                )
+            ]
+        ),
+        "http://adguard.local",
+    )
+    assert await client.async_get_available_blocked_services() == {
+        "youtube": "YouTube",
+        "epic_games": "Epic Games",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_available_blocked_services_from_legacy_list() -> None:
+    client = AdGuardRuleControlClient(
+        FakeSession([FakeResponse(status=404), FakeResponse(payload=["youtube", "epic_games"])]),
+        "http://adguard.local",
+    )
+    assert await client.async_get_available_blocked_services() == {
+        "youtube": "Youtube",
+        "epic_games": "Epic Games",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_blocked_services_config() -> None:
+    client = AdGuardRuleControlClient(
+        FakeSession([FakeResponse(payload={"ids": ["youtube"], "schedule": {"time_zone": "Local"}})]),
+        "http://adguard.local",
+    )
+    assert await client.async_get_blocked_services_config() == {
+        "ids": ["youtube"],
+        "schedule": {"time_zone": "Local"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_blocked_services_config() -> None:
+    session = FakeSession([FakeResponse(payload=None)])
+    client = AdGuardRuleControlClient(session, "http://adguard.local")
+    await client.async_update_blocked_services_config(["youtube"], {"time_zone": "Local"})
+    assert session.requests[0][0] == "PUT"
+    assert session.requests[0][2]["json"] == {"ids": ["youtube"], "schedule": {"time_zone": "Local"}}

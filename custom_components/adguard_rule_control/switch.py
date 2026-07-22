@@ -56,8 +56,10 @@ class AdGuardRuleControlSwitch(SwitchEntity):
         status = self._manager.status_for(self._control.control_id)
         return {
             "control_id": self._control.control_id,
+            "kind": status.get("kind"),
             "last_error": self._manager.last_error,
             "generated_rule_count": status.get("generated_rule_count"),
+            "blocked_service_count": status.get("blocked_service_count"),
             "last_generated_checksum": status.get("last_generated_checksum"),
             "last_successful_sync": status.get("last_successful_sync"),
         }
