@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from collections.abc import Iterable
+from urllib.parse import urlparse
 
 from .const import (
     MANAGED_END,
@@ -24,6 +25,9 @@ class RuleBuilderError(ValueError):
 _MAC_RE = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
 _CLIENT_RE = re.compile(r"^[A-Za-z0-9_. @:+-]{1,128}$")
 _UNSAFE_CLIENT_CHARS_RE = re.compile(r"[\n\r',=$]")
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
 
 
 def validate_comment_label(value: str, field_name: str = "Label") -> str:
@@ -95,6 +99,38 @@ def validate_rule(rule: str) -> str:
     if "$client=" in rule or ",client=" in rule or "$client='" in rule or ",client='" in rule:
         raise RuleBuilderError("Rules cannot include a client modifier directly")
     return rule
+
+
+def normalize_domain(value: str) -> str:
+    """Normalize a user-entered website or URL into a domain name."""
+    value = value.strip().lower()
+    if not value:
+        raise RuleBuilderError("Domain is required")
+    if "\n" in value or "\r" in value or MANAGED_START in value or MANAGED_END in value:
+        raise RuleBuilderError("Domain contains unsafe text")
+    if "://" in value:
+        hostname = urlparse(value).hostname
+    else:
+        hostname = value.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if not hostname:
+        raise RuleBuilderError("Domain is required")
+    hostname = hostname.strip(".")
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        raise RuleBuilderError("Enter a website domain, not an IP address")
+    if not _DOMAIN_RE.fullmatch(hostname):
+        raise RuleBuilderError("Enter a valid domain, such as youtube.com")
+    return hostname
+
+
+def domain_to_block_rule(value: str) -> str:
+    """Build an AdGuard block rule from a plain domain or URL."""
+    return f"||{normalize_domain(value)}^"
 
 
 def add_client_modifier(rule: str, target: ClientTarget) -> str:

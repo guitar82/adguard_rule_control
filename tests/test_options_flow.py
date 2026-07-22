@@ -6,8 +6,13 @@ import pytest
 
 from custom_components.adguard_rule_control.const import TARGET_IPV4, TARGET_MAC
 from custom_components.adguard_rule_control.config_flow import _find_control_index
-from custom_components.adguard_rule_control.presets import PRESET_CUSTOM, get_preset, preset_choices
-from custom_components.adguard_rule_control.rule_builder import RuleBuilderError, validate_client_identifier, validate_rule
+from custom_components.adguard_rule_control.presets import PRESET_BLOCK_WEBSITE, PRESET_CUSTOM, get_preset, preset_choices
+from custom_components.adguard_rule_control.rule_builder import (
+    RuleBuilderError,
+    domain_to_block_rule,
+    validate_client_identifier,
+    validate_rule,
+)
 
 
 def test_add_client_target_ipv4_validation() -> None:
@@ -54,8 +59,9 @@ def test_duplicate_control_options_shape() -> None:
 
 def test_preset_choices_include_custom_and_youtube() -> None:
     choices = preset_choices()
-    assert choices[PRESET_CUSTOM] == "Custom rules"
-    assert choices["youtube"] == "Block YouTube"
+    assert choices[PRESET_BLOCK_WEBSITE].startswith("Block a website")
+    assert choices[PRESET_CUSTOM] == "Advanced custom rules"
+    assert choices["youtube"].startswith("Block YouTube")
 
 
 def test_youtube_preset_prefills_rules() -> None:
@@ -64,3 +70,23 @@ def test_youtube_preset_prefills_rules() -> None:
     assert preset.name == "Block YouTube"
     assert "||youtube.com^" in preset.rules
     assert preset.icon == "mdi:youtube"
+
+
+def test_block_all_preset() -> None:
+    preset = get_preset("block_all")
+    assert preset is not None
+    assert preset.name == "Block All Internet"
+    assert preset.rules == ("||*^",)
+
+
+def test_domain_to_block_rule_from_plain_domain() -> None:
+    assert domain_to_block_rule("youtube.com") == "||youtube.com^"
+
+
+def test_domain_to_block_rule_from_url() -> None:
+    assert domain_to_block_rule("https://www.reddit.com/r/popular") == "||reddit.com^"
+
+
+def test_domain_to_block_rule_rejects_ip() -> None:
+    with pytest.raises(RuleBuilderError):
+        domain_to_block_rule("192.168.1.1")

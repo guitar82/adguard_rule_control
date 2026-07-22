@@ -15,6 +15,10 @@ It connects directly to the AdGuard Home REST API, reads existing custom filteri
 - Import of existing managed-block state
 - Preview of generated rules before use
 - Built-in presets for common services and categories
+- Block-all preset for carefully targeted device controls
+- Plain-English "block a website" builder
+- AdGuard client discovery for easier device selection
+- Everyone vs one-device setup wizard
 - In-GUI setup instructions and custom rule examples
 - Duplicate and reorder rule controls
 - Optional multi-instance service targeting
@@ -73,7 +77,15 @@ Open:
 Settings > Devices & services > AdGuard Rule Control > Configure
 ```
 
-Choose **add**, then pick a preset or choose custom rules. Presets pre-fill the display name, icon, and AdGuard rule list so most users only need to choose whether the control is global or limited to one client.
+Choose **add**, then follow the setup wizard:
+
+1. Pick a preset or choose **Block a website by name**.
+2. Choose whether the switch applies to one device/client or everyone.
+3. Pick a discovered AdGuard client, or enter one manually.
+4. Review the switch name and generated rules.
+5. Save the control.
+
+Presets pre-fill the display name, icon, and AdGuard rule list. Users can still edit the generated rules before saving.
 
 Built-in presets include:
 
@@ -86,6 +98,8 @@ Built-in presets include:
 - Streaming apps
 - Gaming services
 - Social media
+- Block all internet
+- Adult sites starter preset
 - Custom domain block
 
 After choosing a preset, review or adjust:
@@ -110,6 +124,30 @@ The Configure flow also supports:
 - Import current enabled states from an existing AdGuard managed block
 
 The preview step uses the same generator as the live switch path, so it shows the actual rules that would be written between this integration's markers.
+
+## Blocking One Website
+
+For a simple website block, choose **Block a website by name** and enter a domain or URL:
+
+```text
+youtube.com
+https://www.reddit.com/r/popular
+```
+
+The integration turns that into a safe AdGuard rule such as:
+
+```text
+||reddit.com^
+```
+
+## Choosing a Device
+
+When applying a control to one device/client, the integration attempts to read clients from AdGuard Home and show them in a picker. If a device is not listed, choose manual entry and enter:
+
+- IPv4 address
+- IPv6 address
+- MAC address
+- Exact AdGuard client name
 
 ## Importing Existing State
 
@@ -218,6 +256,17 @@ data:
 When `entry_id` is omitted, the service resolves the control automatically if exactly one configured instance contains that `control_id`.
 
 ## Automation Example
+
+Use the switch entity directly:
+
+```yaml
+alias: Block YouTube now
+triggers: []
+actions:
+  - action: switch.turn_on
+    target:
+      entity_id: switch.adguard_rule_control_block_youtube
+```
 
 ```yaml
 alias: Block streaming at bedtime

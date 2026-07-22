@@ -18,10 +18,16 @@ from .api import (
     AdGuardRuleControlClient,
 )
 from .const import (
+    AUDIENCE_CLIENT,
+    AUDIENCE_EVERYONE,
+    CLIENT_CHOICE_MANUAL,
+    CONF_AUDIENCE,
     CONF_BASE_URL,
+    CONF_CLIENT_CHOICE,
     CONF_CONTROL_ID,
     CONF_CONTROLS,
     CONF_DISPLAY_NAME,
+    CONF_DOMAIN,
     CONF_ENTITY_ENABLED,
     CONF_HOST,
     CONF_ICON,
@@ -41,9 +47,10 @@ from .const import (
     TARGET_TYPES,
 )
 from .models import ClientTarget, RuleControl
-from .presets import PRESET_CUSTOM, get_preset, preset_choices
+from .presets import PRESET_BLOCK_WEBSITE, PRESET_CUSTOM, get_preset, preset_choices
 from .rule_builder import (
     RuleBuilderError,
+    domain_to_block_rule,
     preview_control,
     validate_client_identifier,
     validate_comment_label,
@@ -144,6 +151,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._edit_index: int | None = None
         self._select_action: str | None = None
         self._preset_defaults: dict[str, Any] = {}
+        self._pending_control: dict[str, Any] | None = None
+        self._client_choices_data: dict[str, dict[str, str]] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Choose an options action."""
@@ -188,6 +197,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         """Choose a rule preset for a new control."""
         if user_input is not None:
             preset_key = user_input[CONF_PRESET]
+            if preset_key == PRESET_BLOCK_WEBSITE:
+                return await self.async_step_website()
             preset = get_preset(preset_key)
             if preset:
                 self._preset_defaults = {
@@ -197,10 +208,117 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 }
             else:
                 self._preset_defaults = {}
-            return await self.async_step_control()
+            if preset_key == PRESET_CUSTOM:
+                return await self.async_step_control()
+            return await self.async_step_audience()
         return self.async_show_form(
             step_id="preset",
-            data_schema=vol.Schema({vol.Required(CONF_PRESET, default=PRESET_CUSTOM): vol.In(preset_choices())}),
+            data_schema=vol.Schema({vol.Required(CONF_PRESET, default=PRESET_BLOCK_WEBSITE): vol.In(preset_choices())}),
+        )
+
+    async def async_step_website(self, user_input: dict[str, Any] | None = None):
+        """Build a simple block rule from a website name."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                rule = domain_to_block_rule(user_input[CONF_DOMAIN])
+            except RuleBuilderError:
+                errors["base"] = "invalid_domain"
+            else:
+                domain = rule.removeprefix("||").removesuffix("^")
+                self._preset_defaults = {
+                    CONF_DISPLAY_NAME: f"Block {domain}",
+                    CONF_RULES: [rule],
+                    CONF_ICON: "mdi:web-off",
+                }
+                return await self.async_step_audience()
+        return self.async_show_form(
+            step_id="website",
+            data_schema=vol.Schema({vol.Required(CONF_DOMAIN): str}),
+            errors=errors,
+        )
+
+    async def async_step_audience(self, user_input: dict[str, Any] | None = None):
+        """Choose whether a new control applies globally or to one client."""
+        if user_input is not None:
+            if user_input[CONF_AUDIENCE] == AUDIENCE_EVERYONE:
+                self._preset_defaults.pop(CONF_TARGET, None)
+                return await self.async_step_control()
+            return await self.async_step_client()
+        return self.async_show_form(
+            step_id="audience",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_AUDIENCE, default=AUDIENCE_CLIENT): vol.In(
+                        {
+                            AUDIENCE_CLIENT: "One device or AdGuard client",
+                            AUDIENCE_EVERYONE: "Everyone using this AdGuard Home instance",
+                        }
+                    )
+                }
+            ),
+        )
+
+    async def async_step_client(self, user_input: dict[str, Any] | None = None):
+        """Select a discovered AdGuard client or enter one manually."""
+        if user_input is not None:
+            choice_key = user_input[CONF_CLIENT_CHOICE]
+            if choice_key == CLIENT_CHOICE_MANUAL:
+                return await self.async_step_manual_target()
+            choice = self._client_choices_data[choice_key]
+            self._preset_defaults[CONF_TARGET] = {
+                CONF_TARGET_NAME: choice["display_name"],
+                CONF_TARGET_TYPE: choice["identifier_type"],
+                CONF_TARGET_VALUE: choice["identifier_value"],
+            }
+            return await self.async_step_control()
+
+        choices: dict[str, str] = {}
+        manager = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id)
+        if manager is not None:
+            try:
+                discovered = await manager.client.async_get_clients()
+            except Exception:  # noqa: BLE001 - fallback keeps the easy flow usable
+                discovered = []
+            self._client_choices_data = {
+                str(index): choice
+                for index, choice in enumerate(discovered)
+            }
+            choices.update({key: choice["display_name"] for key, choice in self._client_choices_data.items()})
+        else:
+            self._client_choices_data = {}
+        choices[CLIENT_CHOICE_MANUAL] = "Enter client manually"
+        return self.async_show_form(
+            step_id="client",
+            data_schema=vol.Schema({vol.Required(CONF_CLIENT_CHOICE): vol.In(choices)}),
+        )
+
+    async def async_step_manual_target(self, user_input: dict[str, Any] | None = None):
+        """Enter a client target manually."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                value = validate_client_identifier(user_input[CONF_TARGET_TYPE], user_input[CONF_TARGET_VALUE])
+                target_name = validate_comment_label(user_input.get(CONF_TARGET_NAME) or value, "Target display name")
+            except RuleBuilderError:
+                errors["base"] = "invalid_rule"
+            else:
+                self._preset_defaults[CONF_TARGET] = {
+                    CONF_TARGET_NAME: target_name,
+                    CONF_TARGET_TYPE: user_input[CONF_TARGET_TYPE],
+                    CONF_TARGET_VALUE: value,
+                }
+                return await self.async_step_control()
+        return self.async_show_form(
+            step_id="manual_target",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_TARGET_TYPE): vol.In([target for target in TARGET_TYPES if target != TARGET_GLOBAL]),
+                    vol.Optional(CONF_TARGET_NAME): str,
+                    vol.Required(CONF_TARGET_VALUE): str,
+                }
+            ),
+            errors=errors,
         )
 
     async def async_step_select_control(self, user_input: dict[str, Any] | None = None):
@@ -300,7 +418,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_control(self, user_input: dict[str, Any] | None = None):
         """Add or edit a control."""
-        current = self._controls[self._edit_index] if self._edit_index is not None else self._preset_defaults
+        if self._pending_control is not None:
+            current = self._pending_control
+        elif self._edit_index is not None:
+            current = self._controls[self._edit_index]
+        else:
+            current = self._preset_defaults
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
@@ -330,12 +453,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             except RuleBuilderError:
                 errors["base"] = "invalid_rule"
             else:
-                if self._edit_index is None:
-                    self._controls.append(control)
-                else:
-                    self._controls[self._edit_index] = control
-                self._preset_defaults = {}
-                return self._save()
+                self._pending_control = control
+                return await self.async_step_review()
 
         return self.async_show_form(
             step_id="control",
@@ -353,6 +472,39 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
         )
 
+    async def async_step_review(self, user_input: dict[str, Any] | None = None):
+        """Review generated rules before saving."""
+        if user_input is not None:
+            if user_input["next"] == "back":
+                return await self.async_step_control()
+            control = self._pending_control
+            if control is None:
+                return await self.async_step_init()
+            if self._edit_index is None:
+                self._controls.append(control)
+            else:
+                self._controls[self._edit_index] = control
+            self._pending_control = None
+            self._preset_defaults = {}
+            return self._save()
+
+        control = RuleControl.from_dict(self._pending_control)
+        lines = preview_control(control)
+        extra = len(lines) - MAX_PREVIEW_LINES
+        preview_lines = lines[:MAX_PREVIEW_LINES]
+        if extra > 0:
+            preview_lines.append(f"... {extra} more lines")
+        preview = "\n".join(preview_lines) or "No rules would be generated."
+        return self.async_show_form(
+            step_id="review",
+            data_schema=vol.Schema({vol.Required("next", default="save"): vol.In(["save", "back"])}),
+            description_placeholders={
+                "entity_id": f"switch.adguard_rule_control_{_slugify_entity_id(control.display_name)}",
+                "rule_count": str(len([line for line in lines if line and not line.startswith("!")])),
+                "preview": preview,
+            },
+        )
+
     def _save(self):
         return self.async_create_entry(title="", data={CONF_CONTROLS: self._controls})
 
@@ -365,3 +517,9 @@ def _control_choices(controls: list[dict[str, Any]]) -> dict[str, str]:
 def _find_control_index(controls: list[dict[str, Any]], control_id: str) -> int:
     """Find a configured control by ID."""
     return next(index for index, control in enumerate(controls) if control[CONF_CONTROL_ID] == control_id)
+
+
+def _slugify_entity_id(value: str) -> str:
+    """Return a friendly entity-id preview."""
+    slug = "".join(char.lower() if char.isalnum() else "_" for char in value)
+    return "_".join(part for part in slug.split("_") if part) or "rule_control"

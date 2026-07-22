@@ -40,6 +40,43 @@
           "preset": "Preset"
         }
       },
+      "website": {
+        "title": "Block a Website",
+        "description": "Type a website name or paste a URL. Examples: youtube.com, roblox.com, https://www.reddit.com/r/popular. The integration will create the AdGuard rule for you.",
+        "data": {
+          "domain": "Website"
+        }
+      },
+      "audience": {
+        "title": "Who Should This Apply To?",
+        "description": "Choose one device/client for bedtime, school, or focus controls. Choose everyone only when you really want this rule to affect your whole AdGuard Home network.",
+        "data": {
+          "audience": "Apply to"
+        }
+      },
+      "client": {
+        "title": "Choose a Device or Client",
+        "description": "Pick a client discovered from AdGuard Home, or choose manual entry if the device is not listed yet.",
+        "data": {
+          "client_choice": "Device or client"
+        }
+      },
+      "manual_target": {
+        "title": "Enter Client Manually",
+        "description": "Use an IPv4 address, IPv6 address, MAC address, or exact AdGuard client name. Examples: 192.168.1.25, aa:bb:cc:dd:ee:ff, Living Room TV.",
+        "data": {
+          "target_type": "Identifier type",
+          "target_name": "Friendly name",
+          "target_value": "Identifier"
+        }
+      },
+      "review": {
+        "title": "Review and Save",
+        "description": "This will create or update {entity_id}. When the switch is turned on, AdGuard Rule Control will write {rule_count} managed rule(s):\n\n{preview}",
+        "data": {
+          "next": "Next"
+        }
+      },
       "move": {
         "title": "Move rule control",
         "data": {
@@ -98,6 +135,7 @@
     },
     "error": {
       "invalid_rule": "Rule or client target is invalid.",
+      "invalid_domain": "Enter a valid website domain, such as youtube.com.",
       "no_controls": "Add a rule control first."
     }
   }

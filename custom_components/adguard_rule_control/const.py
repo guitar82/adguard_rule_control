@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "adguard_rule_control"
 NAME = "AdGuard Rule Control"
-VERSION = "0.1.0-beta.3"
+VERSION = "0.1.0-beta.4"
 
 PLATFORMS = ["switch", "binary_sensor", "sensor", "button"]
 
@@ -28,6 +28,13 @@ CONF_TARGET_NAME = "target_name"
 CONF_ICON = "icon"
 CONF_ENTRY_ID = "entry_id"
 CONF_PRESET = "preset"
+CONF_AUDIENCE = "audience"
+CONF_CLIENT_CHOICE = "client_choice"
+CONF_DOMAIN = "domain"
+
+AUDIENCE_EVERYONE = "everyone"
+AUDIENCE_CLIENT = "client"
+CLIENT_CHOICE_MANUAL = "manual"
 
 TARGET_GLOBAL = "global"
 TARGET_IPV4 = "ipv4"

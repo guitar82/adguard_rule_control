@@ -105,3 +105,49 @@ async def test_failed_rules_update() -> None:
     client = AdGuardRuleControlClient(FakeSession([FakeResponse(status=500)]), "http://adguard.local")
     with pytest.raises(AdGuardConnectionError):
         await client.async_set_user_rules(["||example.com^"])
+
+
+@pytest.mark.asyncio
+async def test_get_clients() -> None:
+    client = AdGuardRuleControlClient(
+        FakeSession(
+            [
+                FakeResponse(
+                    payload={
+                        "clients": [{"name": "Living Room TV", "ids": ["192.168.1.25", "AA-BB-CC-DD-EE-FF"]}],
+                        "auto_clients": [{"name": "Phone", "ip": "192.168.1.26"}],
+                    }
+                )
+            ]
+        ),
+        "http://adguard.local",
+    )
+    assert await client.async_get_clients() == [
+        {
+            "display_name": "Living Room TV",
+            "identifier_type": "client_name",
+            "identifier_value": "Living Room TV",
+        },
+        {
+            "display_name": "Living Room TV (192.168.1.25)",
+            "identifier_type": "ipv4",
+            "identifier_value": "192.168.1.25",
+        },
+        {
+            "display_name": "Living Room TV (aa:bb:cc:dd:ee:ff)",
+            "identifier_type": "mac",
+            "identifier_value": "aa:bb:cc:dd:ee:ff",
+        },
+        {
+            "display_name": "Phone (192.168.1.26)",
+            "identifier_type": "ipv4",
+            "identifier_value": "192.168.1.26",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_clients_rejects_malformed_response() -> None:
+    client = AdGuardRuleControlClient(FakeSession([FakeResponse(payload={"clients": {}})]), "http://adguard.local")
+    with pytest.raises(AdGuardInvalidResponseError):
+        await client.async_get_clients()
