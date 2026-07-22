@@ -29,7 +29,13 @@ def test_add_block_when_absent() -> None:
 def test_replace_existing_block() -> None:
     current = ["||keep.com^", MANAGED_START, "||old.com^", MANAGED_END]
     block = build_managed_block([RuleControl("id", "New", ("||new.com^",))])
-    assert replace_managed_block(current, block) == ["||keep.com^", MANAGED_START, "! Rule Control: New", "||new.com^", MANAGED_END]
+    assert replace_managed_block(current, block) == [
+        "||keep.com^",
+        MANAGED_START,
+        "! Rule Control: New",
+        "||new.com^",
+        MANAGED_END,
+    ]
 
 
 def test_remove_block_when_no_controls_active() -> None:

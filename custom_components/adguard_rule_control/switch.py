@@ -62,6 +62,8 @@ class AdGuardRuleControlSwitch(SwitchEntity):
             "blocked_service_count": status.get("blocked_service_count"),
             "last_generated_checksum": status.get("last_generated_checksum"),
             "last_successful_sync": status.get("last_successful_sync"),
+            "temporary_until": self._manager.temporary_until_for(self._control.control_id),
+            "target": self._control.target.display_name if self._control.target else "everyone",
         }
 
     async def async_turn_on(self, **kwargs) -> None:

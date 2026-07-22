@@ -11,27 +11,35 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .api import (
     AdGuardAuthenticationError,
     AdGuardConnectionError,
+    AdGuardInvalidResponseError,
     AdGuardRuleControlClient,
 )
 from .const import (
     CONF_CONTROLS,
-    CONNECTION_CHECK_INTERVAL_SECONDS,
     CONTROL_KIND_BLOCKED_SERVICES,
     CONTROL_KIND_RULES,
     DOMAIN,
+    MAX_TEMPORARY_BLOCK_MINUTES,
+    STATE_REFRESH_INTERVAL_SECONDS,
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
     WRITE_DEBOUNCE_SECONDS,
 )
 from .models import RuleControl
-from .rule_builder import build_managed_block, generate_rules_for_control, infer_active_control_ids
+from .rule_builder import (
+    RuleBuilderError,
+    build_managed_block,
+    generate_rules_for_control,
+    infer_active_control_ids,
+)
 
 
 class AdGuardRuleControlManager:
@@ -45,7 +53,9 @@ class AdGuardRuleControlManager:
         self._lock = asyncio.Lock()
         self._listeners: list[Callable[[], None]] = []
         self._unsub_interval: Callable[[], None] | None = None
+        self._temporary_unsubs: dict[str, Callable[[], None]] = {}
         self.states: dict[str, bool] = {}
+        self.temporary_until: dict[str, str] = {}
         self.connected = False
         self.last_error: str | None = None
         self.last_sync: str | None = None
@@ -53,6 +63,7 @@ class AdGuardRuleControlManager:
         self.managed_rule_count = 0
         self.control_status: dict[str, dict[str, Any]] = {}
         self.last_managed_blocked_service_ids: set[str] = set()
+        self.managed_client_blocked_services: dict[str, dict[str, Any]] = {}
 
     @property
     def controls(self) -> list[RuleControl]:
@@ -65,21 +76,35 @@ class AdGuardRuleControlManager:
         return self.connected
 
     async def async_load(self) -> None:
-        """Load persisted runtime state and start health checks."""
+        """Load persisted runtime state and start refresh checks."""
         data = await self._store.async_load() or {}
         self.states = {str(key): bool(value) for key, value in data.get("states", {}).items()}
         self.last_sync = data.get("last_sync")
         self.last_checksum = data.get("last_checksum")
         self.control_status = data.get("control_status", {})
         self.last_managed_blocked_service_ids = set(data.get("last_managed_blocked_service_ids", []))
+        self.managed_client_blocked_services = data.get("managed_client_blocked_services", {})
+        self.temporary_until = {
+            str(key): str(value)
+            for key, value in data.get("temporary_until", {}).items()
+            if isinstance(value, str)
+        }
         for control in self.controls:
             self.states.setdefault(control.control_id, False)
             self.control_status.setdefault(control.control_id, self._status_for_control(control, False))
-        await self.async_check_connection()
+        self._discard_expired_temporary_states()
+        try:
+            await self.client.async_test_connection()
+            self.connected = True
+            await self.async_sync()
+        except (AdGuardConnectionError, AdGuardInvalidResponseError, RuleBuilderError) as err:
+            self._create_issue("managed_state_unavailable", str(err))
+            raise
+        self._restore_temporary_timers()
         self._unsub_interval = async_track_time_interval(
             self.hass,
-            lambda _now: self.hass.async_create_task(self.async_check_connection()),
-            timedelta(seconds=CONNECTION_CHECK_INTERVAL_SECONDS),
+            lambda _now: self.hass.async_create_task(self.async_refresh_state()),
+            timedelta(seconds=STATE_REFRESH_INTERVAL_SECONDS),
         )
 
     async def async_unload(self) -> None:
@@ -87,6 +112,9 @@ class AdGuardRuleControlManager:
         if self._unsub_interval:
             self._unsub_interval()
             self._unsub_interval = None
+        for unsub in self._temporary_unsubs.values():
+            unsub()
+        self._temporary_unsubs.clear()
 
     @callback
     def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
@@ -106,29 +134,97 @@ class AdGuardRuleControlManager:
             listener()
 
     async def async_check_connection(self) -> None:
-        """Run a lightweight AdGuard connection check."""
+        """Refresh AdGuard connectivity and managed state."""
+        await self.async_refresh_state()
+
+    async def async_refresh_state(self, *, raise_errors: bool = False) -> None:
+        """Read actual AdGuard state and reconcile entity states."""
         try:
-            await self.client.async_test_connection()
-        except (AdGuardAuthenticationError, AdGuardConnectionError) as err:
+            async with self._lock:
+                existing_rules = await self.client.async_get_user_rules()
+                controls = self.controls
+                active_rule_ids = infer_active_control_ids(
+                    existing_rules,
+                    [control for control in controls if control.kind == CONTROL_KIND_RULES],
+                )
+                service_controls = [control for control in controls if control.kind == CONTROL_KIND_BLOCKED_SERVICES]
+                global_blocked_ids: set[str] = set()
+                client_configs: dict[str, dict[str, Any]] = {}
+                if any(control.target is None for control in service_controls):
+                    blocked_config = await self.client.async_get_blocked_services_config()
+                    global_blocked_ids = set(blocked_config["ids"])
+                if any(control.target is not None for control in service_controls):
+                    client_configs = {
+                        str(client["name"]): client
+                        for client in await self.client.async_get_client_configs()
+                    }
+
+                for control in controls:
+                    if control.kind == CONTROL_KIND_RULES:
+                        enabled = control.control_id in active_rule_ids
+                    elif control.target is None:
+                        enabled = bool(control.blocked_service_ids) and set(control.blocked_service_ids).issubset(
+                            global_blocked_ids
+                        )
+                    else:
+                        client = client_configs.get(control.target.identifier_value)
+                        enabled = bool(
+                            client
+                            and not client.get("use_global_blocked_services", True)
+                            and set(control.blocked_service_ids).issubset(set(client.get("blocked_services", [])))
+                        )
+                    self.states[control.control_id] = enabled
+                    if not enabled:
+                        self._clear_temporary_timer(control.control_id)
+
+                self.connected = True
+                self.last_error = None
+                self.managed_rule_count = sum(
+                    len(generate_rules_for_control(control))
+                    for control in controls
+                    if control.kind == CONTROL_KIND_RULES and self.states.get(control.control_id, False)
+                )
+                self.control_status = {
+                    control.control_id: self._status_for_control(control, self.states.get(control.control_id, False))
+                    for control in controls
+                }
+                await self._async_save_state()
+                ir.async_delete_issue(self.hass, DOMAIN, "managed_state_unavailable")
+        except AdGuardAuthenticationError as err:
             self.connected = False
             self.last_error = str(err)
-        except Exception as err:  # noqa: BLE001 - keep integrations available without leaking internals
+            self.entry.async_start_reauth(self.hass)
+            if raise_errors:
+                raise
+        except (AdGuardConnectionError, AdGuardInvalidResponseError, RuleBuilderError) as err:
             self.connected = False
             self.last_error = str(err)
-        else:
-            self.connected = True
-            self.last_error = None
-        self._notify_listeners()
+            self._create_issue("managed_state_unavailable", str(err))
+            if raise_errors:
+                raise
+        except Exception as err:  # noqa: BLE001 - keep entities unavailable for unexpected API errors
+            self.connected = False
+            self.last_error = str(err)
+            if raise_errors:
+                raise
+        finally:
+            self._notify_listeners()
 
     def state_for(self, control_id: str) -> bool:
         """Return enabled state for a control."""
         return self.states.get(control_id, False)
+
+    def temporary_until_for(self, control_id: str) -> str | None:
+        """Return an active temporary-block deadline."""
+        return self.temporary_until.get(control_id)
 
     async def async_set_control_state(self, control_id: str, enabled: bool) -> None:
         """Set a control state and synchronize AdGuard rules."""
         if control_id not in {control.control_id for control in self.controls}:
             raise ValueError("Unknown rule control")
         previous = self.states.get(control_id, False)
+        previous_deadline = self.temporary_until.get(control_id)
+        self._clear_temporary_timer(control_id)
         self.states[control_id] = enabled
         self._notify_listeners()
         await asyncio.sleep(WRITE_DEBOUNCE_SECONDS)
@@ -136,40 +232,41 @@ class AdGuardRuleControlManager:
             await self.async_sync()
         except Exception:
             self.states[control_id] = previous
+            if previous_deadline:
+                self._set_temporary_timer(control_id, previous_deadline)
+            self._notify_listeners()
+            raise
+
+    async def async_enable_control_for(self, control_id: str, minutes: int) -> None:
+        """Enable a control temporarily and restore it automatically."""
+        if minutes < 1 or minutes > MAX_TEMPORARY_BLOCK_MINUTES:
+            raise ValueError(f"Duration must be between 1 and {MAX_TEMPORARY_BLOCK_MINUTES} minutes")
+        if control_id not in {control.control_id for control in self.controls}:
+            raise ValueError("Unknown rule control")
+        previous = self.states.get(control_id, False)
+        previous_deadline = self.temporary_until.get(control_id)
+        deadline = dt_util.utcnow() + timedelta(minutes=minutes)
+        self.states[control_id] = True
+        self._set_temporary_timer(control_id, deadline.isoformat())
+        self._notify_listeners()
+        await asyncio.sleep(WRITE_DEBOUNCE_SECONDS)
+        try:
+            await self.async_sync()
+        except Exception:
+            self.states[control_id] = previous
+            self._clear_temporary_timer(control_id)
+            if previous_deadline:
+                self._set_temporary_timer(control_id, previous_deadline)
             self._notify_listeners()
             raise
 
     async def async_import_states_from_adguard(self) -> set[str]:
-        """Import enabled states by reading the current managed block from AdGuard."""
-        async with self._lock:
-            existing_rules = await self.client.async_get_user_rules()
-            blocked_config = await self.client.async_get_blocked_services_config()
-            blocked_ids = set(blocked_config["ids"])
-            controls = self.controls
-            active_ids = infer_active_control_ids(
-                existing_rules,
-                [control for control in controls if control.kind == CONTROL_KIND_RULES],
-            )
-            for control in controls:
-                if control.kind == CONTROL_KIND_BLOCKED_SERVICES:
-                    is_active = bool(control.blocked_service_ids) and set(control.blocked_service_ids).issubset(blocked_ids)
-                    self.states[control.control_id] = is_active
-                    if is_active:
-                        active_ids.add(control.control_id)
-                else:
-                    self.states[control.control_id] = control.control_id in active_ids
-                self.control_status[control.control_id] = self._status_for_control(
-                    control,
-                    self.states[control.control_id],
-                )
-            self.connected = True
-            self.last_error = None
-            await self._async_save_state()
-            self._notify_listeners()
-            return active_ids
+        """Import enabled states from AdGuard without writing changes."""
+        await self.async_refresh_state(raise_errors=True)
+        return {control_id for control_id, enabled in self.states.items() if enabled}
 
     async def async_sync(self) -> None:
-        """Rebuild and apply the managed rule block."""
+        """Rebuild and apply all managed rule and blocked-service state."""
         async with self._lock:
             controls = self.controls
             rule_controls = [control for control in controls if control.kind == CONTROL_KIND_RULES]
@@ -177,18 +274,21 @@ class AdGuardRuleControlManager:
             active_controls = [control for control in rule_controls if self.states.get(control.control_id, False)]
             managed_rules = build_managed_block(active_controls)
             await self.client.async_replace_managed_rules(managed_rules)
-            if service_controls or self.last_managed_blocked_service_ids:
+            if service_controls or self.last_managed_blocked_service_ids or self.managed_client_blocked_services:
                 await self._async_sync_blocked_services(service_controls)
             self.connected = True
             self.last_error = None
             self.last_sync = dt_util.utcnow().isoformat()
             self.last_checksum = hashlib.sha256(json.dumps(managed_rules, sort_keys=True).encode()).hexdigest()
-            self.managed_rule_count = max(0, len([rule for rule in managed_rules if rule and not rule.startswith("!")]))
+            self.managed_rule_count = sum(
+                1 for rule in managed_rules if rule and not rule.startswith("!")
+            )
             self.control_status = {
                 control.control_id: self._status_for_control(control, self.states.get(control.control_id, False))
                 for control in controls
             }
             await self._async_save_state()
+            ir.async_delete_issue(self.hass, DOMAIN, "managed_state_unavailable")
             self._notify_listeners()
 
     def status_for(self, control_id: str) -> dict[str, Any]:
@@ -207,34 +307,197 @@ class AdGuardRuleControlManager:
             "blocked_service_count": len(control.blocked_service_ids),
             "last_generated_checksum": checksum,
             "last_successful_sync": self.last_sync if active else None,
+            "temporary_until": self.temporary_until.get(control.control_id),
         }
 
     async def _async_sync_blocked_services(self, service_controls: list[RuleControl]) -> None:
-        """Synchronize global AdGuard blocked services while preserving unrelated services."""
-        config = await self.client.async_get_blocked_services_config()
-        current_ids = set(config["ids"])
-        active_ids = {
-            service_id
-            for control in service_controls
-            if self.states.get(control.control_id, False)
-            for service_id in control.blocked_service_ids
+        """Synchronize global and per-client services while preserving unrelated settings."""
+        global_controls = [control for control in service_controls if control.target is None]
+        client_controls = [control for control in service_controls if control.target is not None]
+        global_config: dict[str, Any] | None = None
+        if (
+            global_controls
+            or client_controls
+            or self.last_managed_blocked_service_ids
+            or self.managed_client_blocked_services
+        ):
+            global_config = await self.client.async_get_blocked_services_config()
+
+        if global_controls or self.last_managed_blocked_service_ids:
+            config = global_config or {"ids": [], "schedule": {}}
+            current_ids = set(config["ids"])
+            active_ids = {
+                service_id
+                for control in global_controls
+                if self.states.get(control.control_id, False)
+                for service_id in control.blocked_service_ids
+            }
+            next_ids = sorted((current_ids - self.last_managed_blocked_service_ids) | active_ids)
+            if current_ids != set(next_ids):
+                await self.client.async_update_blocked_services_config(next_ids, config["schedule"])
+            self.last_managed_blocked_service_ids = set(active_ids)
+
+        target_names = {
+            control.target.identifier_value
+            for control in client_controls
+            if control.target is not None
+        } | set(self.managed_client_blocked_services)
+        if not target_names:
+            return
+
+        client_configs = {
+            str(client["name"]): client
+            for client in await self.client.async_get_client_configs()
         }
-        next_ids = sorted((current_ids - self.last_managed_blocked_service_ids) | active_ids)
-        if set(config["ids"]) != set(next_ids):
-            await self.client.async_update_blocked_services_config(next_ids, config["schedule"])
-        self.last_managed_blocked_service_ids = set(active_ids)
+        for target_name in sorted(target_names):
+            client = client_configs.get(target_name)
+            matching = [
+                control
+                for control in client_controls
+                if control.target is not None and control.target.identifier_value == target_name
+            ]
+            active_ids = {
+                service_id
+                for control in matching
+                if self.states.get(control.control_id, False)
+                for service_id in control.blocked_service_ids
+            }
+            tracked = self.managed_client_blocked_services.get(target_name, {})
+            if client is None:
+                if active_ids or tracked:
+                    raise AdGuardInvalidResponseError(f"AdGuard client '{target_name}' was not found")
+                continue
+            current_ids = set(client.get("blocked_services", []))
+            last_ids = set(tracked.get("ids", []))
+            if not tracked and client.get("use_global_blocked_services", True) and global_config is not None:
+                current_ids.update(global_config["ids"])
+            next_ids = sorted((current_ids - last_ids) | active_ids)
+            previous_use_global = bool(
+                tracked.get("previous_use_global", client.get("use_global_blocked_services", True))
+            )
+            next_use_global = False if active_ids else previous_use_global
+            if current_ids != set(next_ids) or bool(client.get("use_global_blocked_services", True)) != next_use_global:
+                update = _client_update_payload(client)
+                update["blocked_services"] = next_ids
+                update["use_global_blocked_services"] = next_use_global
+                await self.client.async_update_client_config(target_name, update)
+            if active_ids:
+                self.managed_client_blocked_services[target_name] = {
+                    "ids": sorted(active_ids),
+                    "previous_use_global": previous_use_global,
+                }
+            else:
+                self.managed_client_blocked_services.pop(target_name, None)
 
     async def _async_save_state(self) -> None:
         """Persist runtime state."""
+        valid_ids = {control.control_id for control in self.controls}
         await self._store.async_save(
             {
-                "states": self.states,
+                "states": {key: value for key, value in self.states.items() if key in valid_ids},
                 "last_sync": self.last_sync,
                 "last_checksum": self.last_checksum,
-                "control_status": self.control_status,
+                "control_status": {
+                    key: value for key, value in self.control_status.items() if key in valid_ids
+                },
                 "last_managed_blocked_service_ids": sorted(self.last_managed_blocked_service_ids),
+                "managed_client_blocked_services": self.managed_client_blocked_services,
+                "temporary_until": {
+                    key: value for key, value in self.temporary_until.items() if key in valid_ids
+                },
             }
         )
+
+    def _restore_temporary_timers(self) -> None:
+        """Restore persisted temporary timers after restart."""
+        valid_ids = {control.control_id for control in self.controls}
+        for control_id in list(self.temporary_until):
+            if control_id not in valid_ids or not self.states.get(control_id, False):
+                self._clear_temporary_timer(control_id)
+                continue
+            self._set_temporary_timer(control_id, self.temporary_until[control_id])
+
+    def _discard_expired_temporary_states(self) -> None:
+        """Prevent an expired temporary block from being re-applied at startup."""
+        now = dt_util.utcnow()
+        for control_id, deadline_iso in list(self.temporary_until.items()):
+            deadline = dt_util.parse_datetime(deadline_iso)
+            if deadline is None or dt_util.as_utc(deadline) <= now or not self.states.get(control_id, False):
+                self.temporary_until.pop(control_id, None)
+                self.states[control_id] = False
+
+    def _set_temporary_timer(self, control_id: str, deadline_iso: str) -> None:
+        """Schedule one persisted automatic turn-off."""
+        self._clear_temporary_timer(control_id)
+        deadline = dt_util.parse_datetime(deadline_iso)
+        if deadline is None:
+            return
+        deadline = dt_util.as_utc(deadline)
+        delay = max(0.0, (deadline - dt_util.utcnow()).total_seconds())
+        self.temporary_until[control_id] = deadline.isoformat()
+        self._temporary_unsubs[control_id] = async_call_later(
+            self.hass,
+            delay,
+            lambda _now: self.hass.async_create_task(self._async_expire_control(control_id)),
+        )
+
+    def _clear_temporary_timer(self, control_id: str) -> None:
+        """Cancel and forget one automatic turn-off."""
+        if unsub := self._temporary_unsubs.pop(control_id, None):
+            unsub()
+        self.temporary_until.pop(control_id, None)
+
+    async def _async_expire_control(self, control_id: str) -> None:
+        """Turn off a control whose temporary period ended."""
+        self._temporary_unsubs.pop(control_id, None)
+        self.temporary_until.pop(control_id, None)
+        if control_id not in {control.control_id for control in self.controls}:
+            await self._async_save_state()
+            return
+        self.states[control_id] = False
+        try:
+            await self.async_sync()
+        except Exception as err:  # noqa: BLE001 - expose the sanitized API error on entities
+            self.last_error = str(err)
+            self._notify_listeners()
+
+    def _create_issue(self, issue_id: str, error: str) -> None:
+        """Create an actionable Home Assistant repair issue."""
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=issue_id,
+            translation_placeholders={"error": error},
+        )
+
+
+_CLIENT_UPDATE_FIELDS = {
+    "name",
+    "ids",
+    "use_global_settings",
+    "filtering_enabled",
+    "parental_enabled",
+    "safebrowsing_enabled",
+    "safesearch_enabled",
+    "safe_search",
+    "use_global_blocked_services",
+    "blocked_services_schedule",
+    "blocked_services",
+    "upstreams",
+    "tags",
+    "ignore_querylog",
+    "ignore_statistics",
+    "upstreams_cache_enabled",
+    "upstreams_cache_size",
+}
+
+
+def _client_update_payload(client: dict[str, Any]) -> dict[str, Any]:
+    """Strip read-only fields before sending a full client update."""
+    return {key: value for key, value in client.items() if key in _CLIENT_UPDATE_FIELDS}
 
 
 def get_manager(hass: HomeAssistant, entry: ConfigEntry) -> AdGuardRuleControlManager:

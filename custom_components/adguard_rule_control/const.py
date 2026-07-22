@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "adguard_rule_control"
 NAME = "AdGuard Rule Control"
-VERSION = "0.1.0-beta.5"
+VERSION = "0.1.0-beta.6"
 
 PLATFORMS = ["switch", "binary_sensor", "sensor", "button"]
 
@@ -33,6 +33,10 @@ CONF_CLIENT_CHOICE = "client_choice"
 CONF_DOMAIN = "domain"
 CONF_KIND = "kind"
 CONF_BLOCKED_SERVICE_IDS = "blocked_service_ids"
+CONF_BLOCKED_SERVICE_PRESET = "blocked_service_preset"
+CONF_BLOCKED_SERVICE_TARGET = "blocked_service_target"
+CONF_QUICK_BLOCK_MINUTES = "quick_block_minutes"
+CONF_CONFIRM_BLOCK_ALL = "confirm_block_all"
 
 AUDIENCE_EVERYONE = "everyone"
 AUDIENCE_CLIENT = "client"
@@ -57,4 +61,7 @@ STORAGE_KEY_PREFIX = f"{DOMAIN}.state"
 
 DEFAULT_TIMEOUT = 10
 CONNECTION_CHECK_INTERVAL_SECONDS = 300
+STATE_REFRESH_INTERVAL_SECONDS = 60
 WRITE_DEBOUNCE_SECONDS = 1
+DEFAULT_QUICK_BLOCK_MINUTES = 60
+MAX_TEMPORARY_BLOCK_MINUTES = 10080

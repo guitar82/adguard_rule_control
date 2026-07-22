@@ -25,7 +25,10 @@ from .const import (
     CONF_AUDIENCE,
     CONF_BASE_URL,
     CONF_BLOCKED_SERVICE_IDS,
+    CONF_BLOCKED_SERVICE_PRESET,
+    CONF_BLOCKED_SERVICE_TARGET,
     CONF_CLIENT_CHOICE,
+    CONF_CONFIRM_BLOCK_ALL,
     CONF_CONTROL_ID,
     CONF_CONTROLS,
     CONF_DISPLAY_NAME,
@@ -36,6 +39,7 @@ from .const import (
     CONF_KIND,
     CONF_PORT,
     CONF_PRESET,
+    CONF_QUICK_BLOCK_MINUTES,
     CONF_RULES,
     CONF_TARGET,
     CONF_TARGET_NAME,
@@ -45,14 +49,25 @@ from .const import (
     CONF_VERIFY_SSL,
     CONTROL_KIND_BLOCKED_SERVICES,
     CONTROL_KIND_RULES,
+    DEFAULT_QUICK_BLOCK_MINUTES,
     DOMAIN,
     MAX_PREVIEW_LINES,
+    MAX_TEMPORARY_BLOCK_MINUTES,
     NAME,
+    TARGET_CLIENT_NAME,
     TARGET_GLOBAL,
-    TARGET_TYPES,
 )
 from .models import ClientTarget, RuleControl
-from .presets import PRESET_BLOCK_WEBSITE, PRESET_CUSTOM, get_preset, preset_choices
+from .presets import (
+    BLOCKED_SERVICE_PRESET_CUSTOM,
+    PRESET_BLOCK_WEBSITE,
+    PRESET_CUSTOM,
+    blocked_service_preset_choices,
+    blocked_service_preset_ids,
+    blocked_service_preset_name,
+    get_preset,
+    preset_choices,
+)
 from .rule_builder import (
     RuleBuilderError,
     domain_to_block_rule,
@@ -61,6 +76,28 @@ from .rule_builder import (
     validate_comment_label,
     validate_rule,
 )
+
+_ACTION_CHOICES = {
+    "add": "Add a website or rule preset",
+    "add_blocked_services": "Add AdGuard built-in services",
+    "edit": "Edit an existing control",
+    "duplicate": "Duplicate an existing control",
+    "delete": "Delete a control",
+    "move": "Change rule order",
+    "preview": "Preview a control",
+    "import_state": "Import current state from AdGuard",
+    "finish": "Finish without changes",
+}
+
+_TARGET_TYPE_CHOICES = {
+    TARGET_GLOBAL: "Everyone",
+    "ipv4": "IPv4 address",
+    "ipv6": "IPv6 address",
+    "mac": "MAC address",
+    TARGET_CLIENT_NAME: "AdGuard client name",
+}
+
+_OPTIONS_FLOW_BASE = getattr(config_entries, "OptionsFlowWithReload", config_entries.OptionsFlow)
 
 
 def normalize_base_url(host: str, port: int | None, use_ssl: bool) -> str:
@@ -71,11 +108,11 @@ def normalize_base_url(host: str, port: int | None, use_ssl: bool) -> str:
     if "://" not in value:
         value = f"{'https' if use_ssl else 'http'}://{value}"
     parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Invalid URL")
-    netloc = parsed.netloc
-    if port and parsed.port is None:
-        netloc = f"{parsed.hostname}:{port}"
+    hostname = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    selected_port = parsed.port or port
+    netloc = f"{hostname}:{selected_port}" if selected_port else hostname
     path = parsed.path.rstrip("/")
     if path.endswith("/control"):
         path = path[: -len("/control")]
@@ -141,13 +178,113 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None):
+        """Update the AdGuard connection without removing the integration."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                data = await self._async_connection_data(user_input, entry.data)
+            except ValueError:
+                errors["base"] = "invalid_url"
+            except AdGuardAuthenticationError:
+                errors["base"] = "invalid_auth"
+            except AdGuardConnectionError:
+                errors["base"] = "cannot_connect"
+            except AdGuardInvalidResponseError:
+                errors["base"] = "invalid_response"
+            else:
+                return self._update_connection_and_abort(entry, data, "reconfigure_successful")
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_connection_schema(entry.data),
+            errors=errors,
+        )
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]):
+        """Start reauthentication after AdGuard rejects credentials."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None):
+        """Collect and verify replacement AdGuard credentials."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = dict(entry.data)
+            data[CONF_USERNAME] = user_input.get(CONF_USERNAME, entry.data.get(CONF_USERNAME, ""))
+            data[CONF_PASSWORD] = user_input.get(CONF_PASSWORD) or entry.data.get(CONF_PASSWORD, "")
+            client = AdGuardRuleControlClient(
+                async_get_clientsession(self.hass),
+                data[CONF_BASE_URL],
+                data[CONF_USERNAME],
+                data[CONF_PASSWORD],
+                data.get(CONF_VERIFY_SSL, True),
+            )
+            try:
+                await client.async_test_connection()
+            except AdGuardAuthenticationError:
+                errors["base"] = "invalid_auth"
+            except AdGuardConnectionError:
+                errors["base"] = "cannot_connect"
+            except AdGuardInvalidResponseError:
+                errors["base"] = "invalid_response"
+            else:
+                return self._update_connection_and_abort(entry, data, "reauth_successful")
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_USERNAME, default=entry.data.get(CONF_USERNAME, "")): str,
+                    vol.Optional(CONF_PASSWORD): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def _async_connection_data(
+        self,
+        user_input: dict[str, Any],
+        existing_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Normalize and validate connection form data."""
+        existing_data = existing_data or {}
+        username = user_input.get(CONF_USERNAME, existing_data.get(CONF_USERNAME, ""))
+        password = user_input.get(CONF_PASSWORD) or existing_data.get(CONF_PASSWORD, "")
+        base_url = normalize_base_url(user_input[CONF_HOST], user_input.get(CONF_PORT), user_input[CONF_USE_SSL])
+        client = AdGuardRuleControlClient(
+            async_get_clientsession(self.hass),
+            base_url,
+            username,
+            password,
+            user_input[CONF_VERIFY_SSL],
+        )
+        await client.async_test_connection()
+        return {
+            CONF_BASE_URL: base_url,
+            CONF_USERNAME: username,
+            CONF_PASSWORD: password,
+            CONF_VERIFY_SSL: user_input[CONF_VERIFY_SSL],
+        }
+
+    def _update_connection_and_abort(
+        self,
+        entry: config_entries.ConfigEntry,
+        data: dict[str, Any],
+        reason: str,
+    ):
+        """Update and reload using the lifecycle supported by this HA version."""
+        if hasattr(config_entries, "OptionsFlowWithReload"):
+            return self.async_update_reload_and_abort(entry, data_updates=data, reason=reason)
+        self.hass.config_entries.async_update_entry(entry, data=entry.data | data)
+        return self.async_abort(reason=reason)
+
     @staticmethod
     def async_get_options_flow(config_entry):
         """Return options flow handler."""
         return OptionsFlowHandler(config_entry)
 
 
-class OptionsFlowHandler(config_entries.OptionsFlow):
+class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
     """Manage rule controls from integration options."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
@@ -158,6 +295,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self._preset_defaults: dict[str, Any] = {}
         self._pending_control: dict[str, Any] | None = None
         self._client_choices_data: dict[str, dict[str, str]] = {}
+        self._blocked_service_defaults: dict[str, Any] = {}
+        self._blocked_service_choices: dict[str, str] = {}
+        self._block_all_confirmed = False
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Choose an options action."""
@@ -167,7 +307,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             if action == "add":
                 return await self.async_step_preset()
             if action == "add_blocked_services":
-                return await self.async_step_blocked_services()
+                return await self.async_step_blocked_service_preset()
             if action in {"edit", "duplicate", "preview"}:
                 if not self._controls:
                     errors["base"] = "no_controls"
@@ -192,19 +332,35 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required("action", default="add"): vol.In(
-                        [
-                            "add",
-                            "add_blocked_services",
-                            "edit",
-                            "duplicate",
-                            "delete",
-                            "move",
-                            "preview",
-                            "import_state",
-                            "finish",
-                        ]
-                    )
+                    vol.Required("action", default="add"): vol.In(_ACTION_CHOICES)
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_blocked_service_preset(self, user_input: dict[str, Any] | None = None):
+        """Choose a friendly group of AdGuard blocked services."""
+        errors: dict[str, str] = {}
+        services = await self._async_blocked_service_choices()
+        if user_input is not None:
+            preset_key = user_input[CONF_BLOCKED_SERVICE_PRESET]
+            service_ids = blocked_service_preset_ids(preset_key, set(services))
+            if preset_key != BLOCKED_SERVICE_PRESET_CUSTOM and not service_ids:
+                errors["base"] = "unsupported_service_group"
+            else:
+                self._blocked_service_defaults = {
+                    CONF_DISPLAY_NAME: blocked_service_preset_name(preset_key),
+                    CONF_BLOCKED_SERVICE_IDS: list(service_ids),
+                }
+                return await self.async_step_blocked_services()
+        return self.async_show_form(
+            step_id="blocked_service_preset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_BLOCKED_SERVICE_PRESET,
+                        default=BLOCKED_SERVICE_PRESET_CUSTOM,
+                    ): vol.In(blocked_service_preset_choices())
                 }
             ),
             errors=errors,
@@ -214,16 +370,30 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         """Add a control for AdGuard's built-in blocked services."""
         errors: dict[str, str] = {}
         services = await self._async_blocked_service_choices()
-        current = self._controls[self._edit_index] if self._edit_index is not None else {}
+        if self._pending_control and self._pending_control.get(CONF_KIND) == CONTROL_KIND_BLOCKED_SERVICES:
+            current = self._pending_control
+        elif self._edit_index is not None:
+            current = self._controls[self._edit_index]
+        else:
+            current = self._blocked_service_defaults
+        targets = await self._async_blocked_service_target_choices()
         if user_input is not None:
             service_ids = tuple(user_input[CONF_BLOCKED_SERVICE_IDS])
             try:
                 display_name = validate_comment_label(user_input[CONF_DISPLAY_NAME], "Display name")
                 if not service_ids:
                     raise RuleBuilderError("Select at least one blocked service")
+                quick_minutes = int(user_input[CONF_QUICK_BLOCK_MINUTES])
+                if quick_minutes < 1 or quick_minutes > MAX_TEMPORARY_BLOCK_MINUTES:
+                    raise RuleBuilderError("Temporary block duration is invalid")
             except RuleBuilderError:
                 errors["base"] = "invalid_rule"
             else:
+                target_key = user_input[CONF_BLOCKED_SERVICE_TARGET]
+                target = None
+                if target_key != TARGET_GLOBAL:
+                    client_name = target_key.removeprefix("client:")
+                    target = ClientTarget(client_name, TARGET_CLIENT_NAME, client_name)
                 self._pending_control = RuleControl(
                     control_id=current.get(CONF_CONTROL_ID) or str(uuid.uuid4()),
                     display_name=display_name,
@@ -232,8 +402,14 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     icon=user_input.get(CONF_ICON) or "mdi:block-helper",
                     kind=CONTROL_KIND_BLOCKED_SERVICES,
                     blocked_service_ids=service_ids,
+                    target=target,
+                    quick_block_minutes=quick_minutes,
                 ).as_dict()
                 return await self.async_step_review()
+        current_target = current.get(CONF_TARGET, {}).get(CONF_TARGET_VALUE)
+        target_default = f"client:{current_target}" if current_target else TARGET_GLOBAL
+        if target_default not in targets:
+            target_default = TARGET_GLOBAL
         return self.async_show_form(
             step_id="blocked_services",
             data_schema=vol.Schema(
@@ -243,6 +419,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         CONF_BLOCKED_SERVICE_IDS,
                         default=list(current.get(CONF_BLOCKED_SERVICE_IDS, [])),
                     ): cv.multi_select(services),
+                    vol.Required(CONF_BLOCKED_SERVICE_TARGET, default=target_default): vol.In(targets),
+                    vol.Required(
+                        CONF_QUICK_BLOCK_MINUTES,
+                        default=current.get(CONF_QUICK_BLOCK_MINUTES, DEFAULT_QUICK_BLOCK_MINUTES),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_TEMPORARY_BLOCK_MINUTES)),
                     vol.Optional(CONF_ICON, default=current.get(CONF_ICON, "mdi:block-helper")): str,
                 }
             ),
@@ -369,7 +550,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             step_id="manual_target",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_TARGET_TYPE): vol.In([target for target in TARGET_TYPES if target != TARGET_GLOBAL]),
+                    vol.Required(CONF_TARGET_TYPE): vol.In(
+                        {
+                            key: label
+                            for key, label in _TARGET_TYPE_CHOICES.items()
+                            if key != TARGET_GLOBAL
+                        }
+                    ),
                     vol.Optional(CONF_TARGET_NAME): str,
                     vol.Required(CONF_TARGET_VALUE): str,
                 }
@@ -406,7 +593,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             selected = user_input[CONF_CONTROL_ID]
             self._controls = [control for control in self._controls if control[CONF_CONTROL_ID] != selected]
             return self._save()
-        return self.async_show_form(step_id="delete", data_schema=vol.Schema({vol.Required(CONF_CONTROL_ID): vol.In(controls)}))
+        return self.async_show_form(
+            step_id="delete",
+            data_schema=vol.Schema({vol.Required(CONF_CONTROL_ID): vol.In(controls)}),
+        )
 
     async def async_step_move(self, user_input: dict[str, Any] | None = None):
         """Move a configured control up or down."""
@@ -422,7 +612,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_CONTROL_ID): vol.In(controls),
-                    vol.Required("direction", default="up"): vol.In(["up", "down"]),
+                    vol.Required("direction", default="up"): vol.In(
+                        {"up": "Move up", "down": "Move down"}
+                    ),
                 }
             ),
         )
@@ -435,19 +627,27 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             self._edit_index = None
             return await self.async_step_init()
         control = RuleControl.from_dict(self._controls[self._edit_index])
-        try:
-            lines = preview_control(control)
-        except RuleBuilderError as err:
-            preview = str(err)
+        if control.kind == CONTROL_KIND_BLOCKED_SERVICES:
+            target = control.target.display_name if control.target else "Everyone"
+            preview = f"Target: {target}\n" + "\n".join(
+                f"Blocked service: {service_id}" for service_id in control.blocked_service_ids
+            )
         else:
-            extra = len(lines) - MAX_PREVIEW_LINES
-            preview_lines = lines[:MAX_PREVIEW_LINES]
-            if extra > 0:
-                preview_lines.append(f"... {extra} more lines")
-            preview = "\n".join(preview_lines) or "No rules would be generated."
+            try:
+                lines = preview_control(control)
+            except RuleBuilderError as err:
+                preview = str(err)
+            else:
+                extra = len(lines) - MAX_PREVIEW_LINES
+                preview_lines = lines[:MAX_PREVIEW_LINES]
+                if extra > 0:
+                    preview_lines.append(f"... {extra} more lines")
+                preview = "\n".join(preview_lines) or "No rules would be generated."
         return self.async_show_form(
             step_id="preview",
-            data_schema=vol.Schema({vol.Required("next", default="back"): vol.In(["back", "finish"])}),
+            data_schema=vol.Schema(
+                {vol.Required("next", default="back"): vol.In({"back": "Go back", "finish": "Finish"})}
+            ),
             description_placeholders={"preview": preview},
         )
 
@@ -470,7 +670,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 message = f"Imported enabled state for {imported_count} control(s)."
         return self.async_show_form(
             step_id="import_state",
-            data_schema=vol.Schema({vol.Required("next", default="finish"): vol.In(["finish"])}),
+            data_schema=vol.Schema({vol.Required("next", default="finish"): vol.In({"finish": "Finish"})}),
             description_placeholders={"message": message, "imported_count": str(imported_count)},
         )
 
@@ -493,7 +693,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 target = None
                 if target_type != TARGET_GLOBAL:
                     value = validate_client_identifier(target_type, user_input[CONF_TARGET_VALUE])
-                    target_name = validate_comment_label(user_input.get(CONF_TARGET_NAME) or value, "Target display name")
+                    target_name = validate_comment_label(
+                        user_input.get(CONF_TARGET_NAME) or value,
+                        "Target display name",
+                    )
                     target = ClientTarget(
                         target_name,
                         target_type,
@@ -508,11 +711,14 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     target=ClientTarget.from_dict(target),
                     icon=user_input.get(CONF_ICON) or None,
                     kind=current.get(CONF_KIND, CONTROL_KIND_RULES),
+                    quick_block_minutes=int(user_input[CONF_QUICK_BLOCK_MINUTES]),
                 ).as_dict()
             except RuleBuilderError:
                 errors["base"] = "invalid_rule"
             else:
                 self._pending_control = control
+                if "||*^" in rules and target is None and not self._block_all_confirmed:
+                    return await self.async_step_confirm_block_all()
                 return await self.async_step_review()
 
         return self.async_show_form(
@@ -522,12 +728,37 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Required(CONF_DISPLAY_NAME, default=current.get(CONF_DISPLAY_NAME, "")): str,
                     vol.Required(CONF_ENTITY_ENABLED, default=current.get(CONF_ENTITY_ENABLED, True)): bool,
                     vol.Required(CONF_RULES, default="\n".join(current.get(CONF_RULES, []))): str,
-                    vol.Required(CONF_TARGET_TYPE, default=current.get(CONF_TARGET, {}).get(CONF_TARGET_TYPE, TARGET_GLOBAL)): vol.In(TARGET_TYPES),
+                    vol.Required(
+                        CONF_TARGET_TYPE,
+                        default=current.get(CONF_TARGET, {}).get(CONF_TARGET_TYPE, TARGET_GLOBAL),
+                    ): vol.In(_TARGET_TYPE_CHOICES),
                     vol.Optional(CONF_TARGET_NAME, default=current.get(CONF_TARGET, {}).get(CONF_TARGET_NAME, "")): str,
-                    vol.Optional(CONF_TARGET_VALUE, default=current.get(CONF_TARGET, {}).get(CONF_TARGET_VALUE, "")): str,
+                    vol.Optional(
+                        CONF_TARGET_VALUE,
+                        default=current.get(CONF_TARGET, {}).get(CONF_TARGET_VALUE, ""),
+                    ): str,
                     vol.Optional(CONF_ICON, default=current.get(CONF_ICON, "")): str,
+                    vol.Required(
+                        CONF_QUICK_BLOCK_MINUTES,
+                        default=current.get(CONF_QUICK_BLOCK_MINUTES, DEFAULT_QUICK_BLOCK_MINUTES),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_TEMPORARY_BLOCK_MINUTES)),
                 }
             ),
+            errors=errors,
+        )
+
+    async def async_step_confirm_block_all(self, user_input: dict[str, Any] | None = None):
+        """Require explicit confirmation before globally blocking DNS."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input[CONF_CONFIRM_BLOCK_ALL]:
+                errors["base"] = "block_all_not_confirmed"
+            else:
+                self._block_all_confirmed = True
+                return await self.async_step_review()
+        return self.async_show_form(
+            step_id="confirm_block_all",
+            data_schema=vol.Schema({vol.Required(CONF_CONFIRM_BLOCK_ALL, default=False): bool}),
             errors=errors,
         )
 
@@ -535,6 +766,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         """Review generated rules before saving."""
         if user_input is not None:
             if user_input["next"] == "back":
+                if self._pending_control and self._pending_control.get(CONF_KIND) == CONTROL_KIND_BLOCKED_SERVICES:
+                    return await self.async_step_blocked_services()
                 return await self.async_step_control()
             control = self._pending_control
             if control is None:
@@ -549,7 +782,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
         control = RuleControl.from_dict(self._pending_control)
         if control.kind == CONTROL_KIND_BLOCKED_SERVICES:
-            lines = [f"Blocked service: {service_id}" for service_id in control.blocked_service_ids]
+            target = control.target.display_name if control.target else "Everyone"
+            lines = [f"Target: {target}"] + [
+                f"Blocked service: {service_id}" for service_id in control.blocked_service_ids
+            ]
             preview = "\n".join(lines) or "No blocked services selected."
             rule_count = len(control.blocked_service_ids)
         else:
@@ -562,7 +798,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             rule_count = len([line for line in lines if line and not line.startswith("!")])
         return self.async_show_form(
             step_id="review",
-            data_schema=vol.Schema({vol.Required("next", default="save"): vol.In(["save", "back"])}),
+            data_schema=vol.Schema(
+                {vol.Required("next", default="save"): vol.In({"save": "Save", "back": "Go back"})}
+            ),
             description_placeholders={
                 "entity_id": f"switch.adguard_rule_control_{_slugify_entity_id(control.display_name)}",
                 "rule_count": str(rule_count),
@@ -582,8 +820,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             except Exception:  # noqa: BLE001 - keep setup usable with fallback choices
                 services = {}
             if services:
+                self._blocked_service_choices = services
                 return services
-        return {
+        fallback = {
             "youtube": "YouTube",
             "facebook": "Facebook",
             "instagram": "Instagram",
@@ -598,6 +837,24 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             "roblox": "Roblox",
             "onlyfans": "OnlyFans",
         }
+        self._blocked_service_choices = fallback
+        return fallback
+
+    async def _async_blocked_service_target_choices(self) -> dict[str, str]:
+        """Return global and persistent-client targets for built-in services."""
+        choices = {TARGET_GLOBAL: "Everyone using this AdGuard Home instance"}
+        manager = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id)
+        if manager is None:
+            return choices
+        try:
+            clients = await manager.client.async_get_client_configs()
+        except Exception:  # noqa: BLE001 - global service controls remain available
+            return choices
+        for client in clients:
+            name = str(client.get("name") or "").strip()
+            if name:
+                choices[f"client:{name}"] = f"Only {name}"
+        return choices
 
 
 def _control_choices(controls: list[dict[str, Any]]) -> dict[str, str]:
@@ -614,3 +871,19 @@ def _slugify_entity_id(value: str) -> str:
     """Return a friendly entity-id preview."""
     slug = "".join(char.lower() if char.isalnum() else "_" for char in value)
     return "_".join(part for part in slug.split("_") if part) or "rule_control"
+
+
+def _connection_schema(data: dict[str, Any]) -> vol.Schema:
+    """Return a reusable connection form schema with saved defaults."""
+    base_url = str(data.get(CONF_BASE_URL, ""))
+    parsed = urlparse(base_url)
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST, default=base_url): str,
+            vol.Optional(CONF_PORT): int,
+            vol.Required(CONF_USE_SSL, default=parsed.scheme == "https"): bool,
+            vol.Required(CONF_VERIFY_SSL, default=data.get(CONF_VERIFY_SSL, True)): bool,
+            vol.Optional(CONF_USERNAME, default=data.get(CONF_USERNAME, "")): str,
+            vol.Optional(CONF_PASSWORD): str,
+        }
+    )
