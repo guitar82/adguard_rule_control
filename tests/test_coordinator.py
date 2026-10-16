@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -218,3 +219,43 @@ def test_expired_temporary_allow_restores_block(monkeypatch: pytest.MonkeyPatch)
 
     assert manager.states[control.control_id] is True
     assert manager.temporary_until_for(control.control_id) is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_interval_callback_is_async(monkeypatch: pytest.MonkeyPatch) -> None:
+    control = _client_service_control()
+    entry = SimpleNamespace(entry_id="entry", options={CONF_CONTROLS: [control.as_dict()]})
+    monkeypatch.setattr(coordinator_module, "Store", lambda *_args, **_kwargs: SimpleNamespace())
+    manager = AdGuardRuleControlManager(SimpleNamespace(), entry, FakeBlockedServiceClient())
+    manager.async_refresh_state = AsyncMock()
+
+    assert inspect.iscoroutinefunction(manager._async_handle_refresh_interval)
+    await manager._async_handle_refresh_interval(dt_util.utcnow())
+
+    manager.async_refresh_state.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_temporary_timer_registers_async_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    control = _client_service_control()
+    entry = SimpleNamespace(entry_id="entry", options={CONF_CONTROLS: [control.as_dict()]})
+    callbacks: list[Any] = []
+    monkeypatch.setattr(coordinator_module, "Store", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        coordinator_module,
+        "async_call_later",
+        lambda _hass, _delay, action: callbacks.append(action) or (lambda: None),
+    )
+    manager = AdGuardRuleControlManager(SimpleNamespace(), entry, FakeBlockedServiceClient())
+    manager._async_expire_control = AsyncMock()
+
+    manager._set_temporary_timer(
+        control.control_id,
+        (dt_util.utcnow() + timedelta(minutes=5)).isoformat(),
+        False,
+    )
+
+    assert len(callbacks) == 1
+    assert inspect.iscoroutinefunction(callbacks[0])
+    await callbacks[0](dt_util.utcnow())
+    manager._async_expire_control.assert_awaited_once_with(control.control_id)
