@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -140,7 +141,7 @@ class AdGuardRuleControlManager:
         self._restore_temporary_timers()
         self._unsub_interval = async_track_time_interval(
             self.hass,
-            lambda _now: self.hass.async_create_task(self.async_refresh_state()),
+            self._async_handle_refresh_interval,
             timedelta(seconds=STATE_REFRESH_INTERVAL_SECONDS),
         )
 
@@ -172,6 +173,10 @@ class AdGuardRuleControlManager:
 
     async def async_check_connection(self) -> None:
         """Refresh AdGuard connectivity and managed state."""
+        await self.async_refresh_state()
+
+    async def _async_handle_refresh_interval(self, _now: datetime) -> None:
+        """Refresh state from an event-loop-aware interval callback."""
         await self.async_refresh_state()
 
     async def async_refresh_state(self, *, raise_errors: bool = False) -> None:
@@ -568,7 +573,7 @@ class AdGuardRuleControlManager:
         self._temporary_unsubs[control_id] = async_call_later(
             self.hass,
             delay,
-            lambda _now: self.hass.async_create_task(self._async_expire_control(control_id)),
+            partial(self._async_handle_temporary_expiry, control_id),
         )
 
     def _clear_temporary_timer(self, control_id: str) -> None:
@@ -592,6 +597,10 @@ class AdGuardRuleControlManager:
         except Exception as err:  # noqa: BLE001 - expose the sanitized API error on entities
             self.last_error = str(err)
             self._notify_listeners()
+
+    async def _async_handle_temporary_expiry(self, control_id: str, _now: datetime) -> None:
+        """Expire a temporary control from an event-loop-aware timer callback."""
+        await self._async_expire_control(control_id)
 
     async def _async_refresh_activity(self) -> None:
         """Refresh optional aggregate activity without retaining query-log rows."""
