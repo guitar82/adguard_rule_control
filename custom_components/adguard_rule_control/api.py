@@ -134,44 +134,127 @@ class AdGuardRuleControlClient:
             json={"name": name, "data": data},
         )
 
-    async def async_get_available_blocked_services(self) -> dict[str, str]:
-        """Return available AdGuard blocked services as id -> display name."""
-        try:
-            data = await self._async_request("GET", "control/blocked_services/all")
-        except AdGuardConnectionError:
-            data = await self._async_request("GET", "control/blocked_services/services")
 
-        if isinstance(data, list):
-            services: dict[str, str] = {}
-            for item in data:
-                if isinstance(item, str):
-                    services[item] = _humanize_service_id(item)
-                elif isinstance(item, dict):
-                    service_id = str(item.get("id") or item.get("name") or "").strip()
-                    if service_id:
-                        services[service_id] = str(
-                            item.get("name")
-                            or item.get("display_name")
-                            or _humanize_service_id(service_id)
-                        )
-            if services:
-                return services
+    async def async_get_blocked_service_catalog(self) -> dict[str, Any]:
+        """Return the AdGuard blocked-service catalog, including groups and rules."""
+        try:
+            data = await self._async_request(
+                "GET", "control/blocked_services/all"
+            )
+        except AdGuardConnectionError:
+            # Older AdGuard versions may expose only the services endpoint.
+            data = await self._async_request(
+                "GET", "control/blocked_services/services"
+            )
+
         if isinstance(data, dict):
-            raw_services = data.get("services") or data.get("blocked_services") or data.get("ids")
-            if isinstance(raw_services, list):
-                return {
-                    str(item.get("id") or item.get("name")): str(
-                        item.get("name")
-                        or item.get("display_name")
-                        or _humanize_service_id(str(item.get("id") or item.get("name")))
+            raw_services = (
+                data.get("blocked_services")
+                or data.get("services")
+                or data.get("ids")
+                or []
+            )
+            raw_groups = data.get("groups") or []
+        elif isinstance(data, list):
+            raw_services = data
+            raw_groups = []
+        else:
+            raise AdGuardInvalidResponseError(
+                "AdGuard returned an unexpected blocked services response"
+            )
+
+        if not isinstance(raw_services, list):
+            raise AdGuardInvalidResponseError(
+                "AdGuard blocked services list was malformed"
+            )
+
+        services: list[dict[str, Any]] = []
+        for item in raw_services:
+            # The older endpoint may return strings rather than service objects.
+            if isinstance(item, str):
+                service_id = item.strip()
+                if not service_id:
+                    continue
+                services.append({
+                    "id": service_id,
+                    "name": _humanize_service_id(service_id),
+                    "group_id": "",
+                    "rules": [],
+                })
+                continue
+
+            if not isinstance(item, dict):
+                continue
+
+            service_id = str(item.get("id") or item.get("name") or "").strip()
+            if not service_id:
+                continue
+
+            raw_rules = item.get("rules") or []
+            if not isinstance(raw_rules, list):
+                raw_rules = []
+
+            services.append({
+                "id": service_id,
+                "name": str(
+                    item.get("name")
+                    or item.get("display_name")
+                    or _humanize_service_id(service_id)
+                ),
+                "group_id": str(item.get("group_id") or ""),
+                "rules": [
+                    rule.strip()
+                    for rule in raw_rules
+                    if isinstance(rule, str) and rule.strip()
+                ],
+            })
+
+        groups: list[dict[str, str]] = []
+        if isinstance(raw_groups, list):
+            for group in raw_groups:
+                if isinstance(group, str):
+                    group_id = group.strip()
+                    group_name = _humanize_service_id(group_id)
+                elif isinstance(group, dict):
+                    group_id = str(group.get("id") or "").strip()
+                    group_name = str(
+                        group.get("name")
+                        or group.get("display_name")
+                        or _humanize_service_id(group_id)
                     )
-                    if isinstance(item, dict)
-                    else _humanize_service_id(str(item))
-                    for item in raw_services
-                    if (isinstance(item, str) and item)
-                    or (isinstance(item, dict) and (item.get("id") or item.get("name")))
-                }
-        raise AdGuardInvalidResponseError("AdGuard returned an unexpected blocked services response")
+                else:
+                    continue
+
+                if group_id:
+                    groups.append({
+                        "id": group_id,
+                        "name": group_name,
+                    })
+
+        # Some API responses may omit the groups array. Derive groups from
+        # the service objects so service-group presets can still be generated.
+        known_group_ids = {group["id"] for group in groups}
+        for service in services:
+            group_id = service["group_id"]
+            if group_id and group_id not in known_group_ids:
+                groups.append({
+                    "id": group_id,
+                    "name": _humanize_service_id(group_id),
+                })
+                known_group_ids.add(group_id)
+
+        return {
+            "blocked_services": services,
+            "groups": groups,
+        }
+
+    async def async_get_available_blocked_services(self) -> dict[str, str]:
+        """Return available AdGuard blocked services as ID -> display name."""
+        catalog = await self.async_get_blocked_service_catalog()
+        return {
+            service["id"]: service["name"]
+            for service in catalog["blocked_services"]
+        }
 
     async def async_get_blocked_services_config(self) -> dict[str, Any]:
         """Return current global blocked services config."""

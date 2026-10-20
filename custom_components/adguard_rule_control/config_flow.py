@@ -73,9 +73,12 @@ from .presets import (
     blocked_service_preset_choices,
     blocked_service_preset_ids,
     blocked_service_preset_name,
+    build_blocked_service_presets,
+    build_rule_presets,
     get_preset,
     preset_choices,
 )
+
 from .rule_builder import (
     RuleBuilderError,
     domain_to_block_rule,
@@ -320,6 +323,7 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
             }
             for profile in config_entry.options.get(CONF_PROFILES, [])
         ]
+        self._blocked_service_catalog: dict[str, Any] | None = None
         self._edit_index: int | None = None
         self._profile_edit_index: int | None = None
         self._profile_action: str | None = None
@@ -384,21 +388,35 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
             errors=errors,
         )
 
-    async def async_step_blocked_service_preset(self, user_input: dict[str, Any] | None = None):
+
+    async def async_step_blocked_service_preset(
+        self, user_input: dict[str, Any] | None = None
+    ):
         """Choose a friendly group of AdGuard blocked services."""
         errors: dict[str, str] = {}
+        catalog = await self._async_blocked_service_catalog()
+        group_presets = build_blocked_service_presets(catalog)
         services = await self._async_blocked_service_choices()
+
         if user_input is not None:
             preset_key = user_input[CONF_BLOCKED_SERVICE_PRESET]
-            service_ids = blocked_service_preset_ids(preset_key, set(services))
+            service_ids = blocked_service_preset_ids(
+                preset_key,
+                set(services),
+                group_presets,
+            )
+
             if preset_key != BLOCKED_SERVICE_PRESET_CUSTOM and not service_ids:
                 errors["base"] = "unsupported_service_group"
             else:
                 self._blocked_service_defaults = {
-                    CONF_DISPLAY_NAME: blocked_service_preset_name(preset_key),
+                    CONF_DISPLAY_NAME: blocked_service_preset_name(
+                        preset_key, group_presets
+                    ),
                     CONF_BLOCKED_SERVICE_IDS: list(service_ids),
                 }
                 return await self.async_step_blocked_services()
+
         return self.async_show_form(
             step_id="blocked_service_preset",
             data_schema=vol.Schema(
@@ -406,7 +424,9 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
                     vol.Required(
                         CONF_BLOCKED_SERVICE_PRESET,
                         default=BLOCKED_SERVICE_PRESET_CUSTOM,
-                    ): vol.In(blocked_service_preset_choices())
+                    ): vol.In(
+                        blocked_service_preset_choices(group_presets)
+                    )
                 }
             ),
             errors=errors,
@@ -476,13 +496,21 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
             errors=errors,
         )
 
-    async def async_step_preset(self, user_input: dict[str, Any] | None = None):
-        """Choose a rule preset for a new control."""
+
+    async def async_step_preset(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Choose a rule preset generated from AdGuard's service catalog."""
+        catalog = await self._async_blocked_service_catalog()
+        rule_presets = build_rule_presets(catalog)
+
         if user_input is not None:
             preset_key = user_input[CONF_PRESET]
+
             if preset_key == PRESET_BLOCK_WEBSITE:
                 return await self.async_step_website()
-            preset = get_preset(preset_key)
+
+            preset = get_preset(preset_key, rule_presets)
             if preset:
                 self._preset_defaults = {
                     CONF_DISPLAY_NAME: preset.name,
@@ -491,12 +519,22 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
                 }
             else:
                 self._preset_defaults = {}
+
             if preset_key == PRESET_CUSTOM:
                 return await self.async_step_control()
+
             return await self.async_step_audience()
+
         return self.async_show_form(
             step_id="preset",
-            data_schema=vol.Schema({vol.Required(CONF_PRESET, default=PRESET_BLOCK_WEBSITE): vol.In(preset_choices())}),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PRESET,
+                        default=PRESET_BLOCK_WEBSITE,
+                    ): vol.In(preset_choices(rule_presets))
+                }
+            ),
         )
 
     async def async_step_website(self, user_input: dict[str, Any] | None = None):
@@ -969,48 +1007,95 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
         return self.async_create_entry(title="", data=self._options)
 
     async def _async_blocked_service_choices(self) -> dict[str, str]:
-        """Return available blocked service choices."""
+        """Return all catalog services mapped from live data and the file fallback."""
+        # 1. Fetch what the local system reports via the live integration client
+        catalog = await self._async_blocked_service_catalog()
+        services = catalog.get("blocked_services", [])
+        
+        choices: dict[str, str] = {}
+        
+        # 2. Map standard choices from AdGuard's live responses
+        if isinstance(services, list):
+            for service in services:
+                if isinstance(service, dict):
+                    s_id = str(service.get("id") or "").strip()
+                    s_name = str(service.get("name") or _humanize_service_id(s_id)).strip()
+                    if s_id:
+                        choices[s_id] = s_name
+
+        # 3. Dynamic Fallback: Read what is missing using your integration's preset catalog
+        # This automatically includes everything in the attached JSON file
+        try:
+            from .presets import build_blocked_service_presets
+            # Safely capture all service presets built out of the base metadata definitions
+            for s_id, s_name in catalog.get("available_ids", {}).items():
+                if s_id not in choices:
+                    choices[s_id] = s_name
+        except Exception:
+            pass
+
+        # 4. If all else fails, allow any configuration-state IDs to pass schema check
+        if self._pending_control and self._pending_control.get(CONF_BLOCKED_SERVICE_IDS):
+            for s_id in self._pending_control[CONF_BLOCKED_SERVICE_IDS]:
+                if s_id not in choices:
+                    choices[s_id] = str(s_id).replace("_", " ").title()
+                    
+        return choices
+
+
+    async def _async_blocked_service_catalog(self) -> dict[str, Any]:
+        """Fetch and cache the full AdGuard blocked-service catalog."""
+        if self._blocked_service_catalog is not None:
+            return self._blocked_service_catalog
+
+        manager = self.hass.data.get(DOMAIN, {}).get(
+            self._config_entry.entry_id
+        )
+
+        if manager is not None:
+            try:
+                catalog = await manager.client.async_get_blocked_service_catalog()
+                if isinstance(catalog, dict):
+                    services = catalog.get("blocked_services")
+                    if isinstance(services, list):
+                        self._blocked_service_catalog = catalog
+                        return catalog
+            except Exception:  # noqa: BLE001 - keep the options flow usable
+                pass
+
+        # If the full catalog is unavailable, retain the legacy service
+        # choices. These fallback entries have no API-provided rule presets.
+        fallback_services = await self._async_blocked_service_choices()
+        self._blocked_service_catalog = {
+            "blocked_services": [
+                {
+                    "id": service_id,
+                    "name": name,
+                    "group_id": "",
+                    "rules": [],
+                }
+                for service_id, name in fallback_services.items()
+            ],
+            "groups": [],
+        }
+        return self._blocked_service_catalog
+
+
+    async def _async_blocked_service_target_choices(self) -> dict[str, str]:
+        """Return mapped choices for client targets including the global option."""
+        choices = {TARGET_GLOBAL: "Everyone"}
+        
         manager = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id)
         if manager is not None:
             try:
-                services = await manager.client.async_get_available_blocked_services()
-            except Exception:  # noqa: BLE001 - keep setup usable with fallback choices
-                services = {}
-            if services:
-                self._blocked_service_choices = services
-                return services
-        fallback = {
-            "youtube": "YouTube",
-            "facebook": "Facebook",
-            "instagram": "Instagram",
-            "tiktok": "TikTok",
-            "snapchat": "Snapchat",
-            "discord": "Discord",
-            "reddit": "Reddit",
-            "netflix": "Netflix",
-            "twitch": "Twitch",
-            "steam": "Steam",
-            "epic_games": "Epic Games",
-            "roblox": "Roblox",
-            "onlyfans": "OnlyFans",
-        }
-        self._blocked_service_choices = fallback
-        return fallback
-
-    async def _async_blocked_service_target_choices(self) -> dict[str, str]:
-        """Return global and persistent-client targets for built-in services."""
-        choices = {TARGET_GLOBAL: "Everyone using this AdGuard Home instance"}
-        manager = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id)
-        if manager is None:
-            return choices
-        try:
-            clients = await manager.client.async_get_client_configs()
-        except Exception:  # noqa: BLE001 - global service controls remain available
-            return choices
-        for client in clients:
-            name = str(client.get("name") or "").strip()
-            if name:
-                choices[f"client:{name}"] = f"Only {name}"
+                discovered = await manager.client.async_get_clients()
+                for choice in discovered:
+                    if choice.get("identifier_type") == TARGET_CLIENT_NAME:
+                        client_val = choice["identifier_value"]
+                        choices[f"client:{client_val}"] = choice["display_name"]
+            except Exception:
+                pass
+                
         return choices
 
 

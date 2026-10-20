@@ -1,8 +1,10 @@
-"""Built-in rule presets for easier setup."""
+
+"""Dynamic presets built from the AdGuard Home service catalog."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 PRESET_CUSTOM = "custom"
 PRESET_BLOCK_WEBSITE = "block_website"
@@ -10,29 +12,10 @@ PRESET_BLOCK_WEBSITE = "block_website"
 BLOCKED_SERVICE_PRESET_CUSTOM = "custom"
 BLOCKED_SERVICE_PRESET_ALL = "all"
 
-BLOCKED_SERVICE_PRESETS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "social": (
-        "Social Media",
-        ("facebook", "instagram", "threads", "tiktok", "snapchat", "reddit", "twitter", "x", "pinterest"),
-    ),
-    "streaming": (
-        "Streaming Apps",
-        ("youtube", "netflix", "hulu", "disneyplus", "hbomax", "max", "primevideo", "twitch", "peacocktv"),
-    ),
-    "gaming": (
-        "Gaming Services",
-        ("steam", "epic_games", "xboxlive", "playstation", "nintendo", "roblox", "minecraft"),
-    ),
-    "messaging": (
-        "Messaging and Chat",
-        ("discord", "whatsapp", "telegram", "signal", "skype", "viber"),
-    ),
-}
-
 
 @dataclass(frozen=True)
 class RulePreset:
-    """A built-in rule preset."""
+    """A rule preset displayed in the options flow."""
 
     key: str
     name: str
@@ -41,228 +24,191 @@ class RulePreset:
     rules: tuple[str, ...]
 
 
-RULE_PRESETS: tuple[RulePreset, ...] = (
-    RulePreset(
-        key="youtube",
-        name="Block YouTube",
-        description="Blocks YouTube website, app, thumbnails, and video delivery domains.",
-        icon="mdi:youtube",
-        rules=(
-            "||youtube.com^",
-            "||www.youtube.com^",
-            "||m.youtube.com^",
-            "||youtu.be^",
-            "||youtube-nocookie.com^",
-            "||googlevideo.com^",
-            "||ytimg.com^",
-        ),
-    ),
-    RulePreset(
-        key="meta",
-        name="Block Facebook and Instagram",
-        description="Blocks Facebook, Instagram, Threads, and common Meta media domains.",
-        icon="mdi:facebook",
-        rules=(
-            "||facebook.com^",
-            "||www.facebook.com^",
-            "||m.facebook.com^",
-            "||fbcdn.net^",
-            "||instagram.com^",
-            "||www.instagram.com^",
-            "||cdninstagram.com^",
-            "||threads.net^",
-        ),
-    ),
-    RulePreset(
-        key="tiktok",
-        name="Block TikTok",
-        description="Blocks TikTok website, app, and common media delivery domains.",
-        icon="mdi:music-note",
-        rules=(
-            "||tiktok.com^",
-            "||www.tiktok.com^",
-            "||m.tiktok.com^",
-            "||tiktokcdn.com^",
-            "||tiktokv.com^",
-            "||byteoversea.com^",
-            "||ibytedtos.com^",
-        ),
-    ),
-    RulePreset(
-        key="snapchat",
-        name="Block Snapchat",
-        description="Blocks Snapchat website, app, and common media domains.",
-        icon="mdi:ghost",
-        rules=(
-            "||snapchat.com^",
-            "||www.snapchat.com^",
-            "||sc-cdn.net^",
-            "||snapads.com^",
-        ),
-    ),
-    RulePreset(
-        key="discord",
-        name="Block Discord",
-        description="Blocks Discord chat, invite, app, and CDN domains.",
-        icon="mdi:controller-classic",
-        rules=(
-            "||discord.com^",
-            "||discord.gg^",
-            "||discordapp.com^",
-            "||discordapp.net^",
-            "||discordcdn.com^",
-        ),
-    ),
-    RulePreset(
-        key="reddit",
-        name="Block Reddit",
-        description="Blocks Reddit website, short links, media, and static asset domains.",
-        icon="mdi:reddit",
-        rules=(
-            "||reddit.com^",
-            "||www.reddit.com^",
-            "||old.reddit.com^",
-            "||redd.it^",
-            "||redditmedia.com^",
-            "||redditstatic.com^",
-        ),
-    ),
-    RulePreset(
-        key="streaming",
-        name="Block Streaming Apps",
-        description=(
-            "Blocks common video streaming services such as Netflix, Hulu, Disney+, Max, Prime Video, and Twitch."
-        ),
-        icon="mdi:television-play",
-        rules=(
-            "||netflix.com^",
-            "||nflxvideo.net^",
-            "||hulu.com^",
-            "||disneyplus.com^",
-            "||disney-plus.net^",
-            "||max.com^",
-            "||hbomax.com^",
-            "||primevideo.com^",
-            "||amazonvideo.com^",
-            "||peacocktv.com^",
-            "||paramountplus.com^",
-            "||pluto.tv^",
-            "||twitch.tv^",
-            "||ttvnw.net^",
-        ),
-    ),
-    RulePreset(
-        key="gaming",
-        name="Block Gaming Services",
-        description=(
-            "Blocks common gaming services such as Steam, Epic, Xbox, PlayStation, Nintendo, Roblox, and Minecraft."
-        ),
-        icon="mdi:gamepad-variant",
-        rules=(
-            "||steampowered.com^",
-            "||steamcommunity.com^",
-            "||steamstatic.com^",
-            "||epicgames.com^",
-            "||unrealengine.com^",
-            "||xboxlive.com^",
-            "||xbox.com^",
-            "||playstation.net^",
-            "||playstation.com^",
-            "||nintendo.net^",
-            "||nintendo.com^",
-            "||roblox.com^",
-            "||rbxcdn.com^",
-            "||minecraft.net^",
-        ),
-    ),
-    RulePreset(
-        key="social",
-        name="Block Social Media",
-        description="Blocks common social media services in one switch.",
-        icon="mdi:account-group",
-        rules=(
-            "||facebook.com^",
-            "||instagram.com^",
-            "||threads.net^",
-            "||tiktok.com^",
-            "||snapchat.com^",
-            "||reddit.com^",
-            "||x.com^",
-            "||twitter.com^",
-            "||pinterest.com^",
-        ),
-    ),
-    RulePreset(
-        key="block_all",
-        name="Block All Internet",
-        description="Blocks all DNS lookups for the selected target. Best used only with one device/client.",
-        icon="mdi:wifi-off",
-        rules=("||*^",),
-    ),
-    RulePreset(
-        key="adult",
-        name="Block Adult Sites",
-        description=(
-            "A simple starter preset for adult-site domains. Use a full blocklist in AdGuard for stronger coverage."
-        ),
-        icon="mdi:shield-alert",
-        rules=(
-            "||pornhub.com^",
-            "||xvideos.com^",
-            "||xnxx.com^",
-            "||redtube.com^",
-            "||youporn.com^",
-            "||onlyfans.com^",
-        ),
-    ),
-    RulePreset(
-        key="custom_domain",
-        name="Custom Domain Block",
-        description="Starts with one example domain rule that you can edit.",
-        icon="mdi:web-off",
-        rules=("||example.com^",),
-    ),
-)
+def build_blocked_service_presets(
+    catalog: dict[str, Any],
+) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Build service-group presets from the AdGuard API catalog."""
+    services = catalog.get("blocked_services", [])
+    groups = catalog.get("groups", [])
+
+    if not isinstance(services, list):
+        services = []
+    if not isinstance(groups, list):
+        groups = []
+
+    group_names: dict[str, str] = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        group_id = str(group.get("id") or "").strip()
+        if group_id:
+            group_names[group_id] = str(
+                group.get("name") or _humanize(group_id)
+            )
+
+    grouped_ids: dict[str, list[str]] = {}
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+
+        service_id = str(service.get("id") or "").strip()
+        group_id = str(service.get("group_id") or "").strip()
+
+        if service_id and group_id:
+            grouped_ids.setdefault(group_id, []).append(service_id)
+
+    presets: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for group_id, service_ids in grouped_ids.items():
+        presets[group_id] = (
+            group_names.get(group_id, _humanize(group_id)),
+            tuple(sorted(set(service_ids))),
+        )
+
+    return presets
 
 
-def preset_choices() -> dict[str, str]:
-    """Return choices for the options flow."""
+def build_rule_presets(catalog: dict[str, Any]) -> tuple[RulePreset, ...]:
+    """Build individual service rule presets from API-provided rules."""
+    services = catalog.get("blocked_services", [])
+    if not isinstance(services, list):
+        services = []
+
+    presets: list[RulePreset] = []
+    for service in services:
+        if not isinstance(service, dict):
+            continue
+
+        service_id = str(service.get("id") or "").strip()
+        service_name = str(
+            service.get("name") or _humanize(service_id)
+        ).strip()
+        raw_rules = service.get("rules", [])
+
+        if not service_id or not isinstance(raw_rules, list):
+            continue
+
+        rules = tuple(
+            rule.strip()
+            for rule in raw_rules
+            if isinstance(rule, str) and rule.strip()
+        )
+        if not rules:
+            continue
+
+        presets.append(
+            RulePreset(
+                key=f"service_{service_id}",
+                name=f"Block {service_name}",
+                description=(
+                    f"Blocks {service_name} using rules supplied by AdGuard Home."
+                ),
+                icon="mdi:shield-block",
+                rules=rules,
+            )
+        )
+
+    # Generic presets are not tied to any particular service in the API.
+    presets.extend(
+        (
+            RulePreset(
+                key="block_all",
+                name="Block All Internet",
+                description=(
+                    "Blocks all DNS lookups for the selected target. "
+                    "Best used only with one device/client."
+                ),
+                icon="mdi:wifi-off",
+                rules=("||*^",),
+            ),
+            RulePreset(
+                key="custom_domain",
+                name="Custom Domain Block",
+                description="Starts with one example domain rule that you can edit.",
+                icon="mdi:web-off",
+                rules=("||example.com^",),
+            ),
+        )
+    )
+
+    return tuple(presets)
+
+
+def preset_choices(
+    presets: tuple[RulePreset, ...] = (),
+) -> dict[str, str]:
+    """Return choices for the rule-preset options flow."""
     choices = {
         PRESET_BLOCK_WEBSITE: "Block a website by name - easiest for one site",
         PRESET_CUSTOM: "Advanced custom rules",
     }
-    choices.update({preset.key: f"{preset.name} - {preset.description}" for preset in RULE_PRESETS})
+    choices.update({
+        preset.key: f"{preset.name} - {preset.description}"
+        for preset in presets
+    })
     return choices
 
 
-def get_preset(key: str) -> RulePreset | None:
-    """Return a preset by key."""
-    return next((preset for preset in RULE_PRESETS if preset.key == key), None)
+def get_preset(
+    key: str,
+    presets: tuple[RulePreset, ...] = (),
+) -> RulePreset | None:
+    """Return a rule preset by key."""
+    return next(
+        (preset for preset in presets if preset.key == key),
+        None,
+    )
 
 
-def blocked_service_preset_choices() -> dict[str, str]:
-    """Return friendly blocked-service group choices."""
+def blocked_service_preset_choices(
+    presets: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, str]:
+    """Return service-group choices built from the API catalog."""
     choices = {
         BLOCKED_SERVICE_PRESET_CUSTOM: "Choose individual services",
         BLOCKED_SERVICE_PRESET_ALL: "All services available in AdGuard",
     }
-    choices.update({key: name for key, (name, _service_ids) in BLOCKED_SERVICE_PRESETS.items()})
+    choices.update({
+        key: name
+        for key, (name, _service_ids) in presets.items()
+    })
     return choices
 
 
-def blocked_service_preset_ids(key: str, available_ids: set[str]) -> tuple[str, ...]:
-    """Return supported service IDs for a friendly group."""
+def blocked_service_preset_ids(
+    key: str,
+    available_ids: set[str],
+    presets: dict[str, tuple[str, tuple[str, ...]]],
+) -> tuple[str, ...]:
+    """Return valid service IDs belonging to the selected group."""
     if key == BLOCKED_SERVICE_PRESET_ALL:
         return tuple(sorted(available_ids))
-    preset = BLOCKED_SERVICE_PRESETS.get(key)
+
+    preset = presets.get(key)
     if preset is None:
         return ()
-    return tuple(service_id for service_id in preset[1] if service_id in available_ids)
+
+    # The preset is (group_name, service_ids).
+    # Return only IDs that are actually available from AdGuard.
+    _group_name, service_ids = preset
+    return tuple(
+        service_id
+        for service_id in service_ids
+        if service_id in available_ids
+    )
 
 
-def blocked_service_preset_name(key: str) -> str:
-    """Return a default display name for a blocked-service group."""
+def blocked_service_preset_name(
+    key: str,
+    presets: dict[str, tuple[str, tuple[str, ...]]],
+) -> str:
+    """Return a display name for a blocked-service preset."""
     if key == BLOCKED_SERVICE_PRESET_ALL:
         return "Block All Services"
-    preset = BLOCKED_SERVICE_PRESETS.get(key)
+
+    preset = presets.get(key)
     return f"Block {preset[0]}" if preset else "Block Services"
+
+
+def _humanize(value: str) -> str:
+    """Convert an API identifier into a readable label."""
+    return value.replace("_", " ").replace("-", " ").title()
