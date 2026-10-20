@@ -320,6 +320,7 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
             }
             for profile in config_entry.options.get(CONF_PROFILES, [])
         ]
+        self._blocked_service_groups: dict[str, tuple[str, ...]] = {}
         self._edit_index: int | None = None
         self._profile_edit_index: int | None = None
         self._profile_action: str | None = None
@@ -388,17 +389,31 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
         """Choose a friendly group of AdGuard blocked services."""
         errors: dict[str, str] = {}
         services = await self._async_blocked_service_choices()
+        groups = self._blocked_service_groups
+
         if user_input is not None:
             preset_key = user_input[CONF_BLOCKED_SERVICE_PRESET]
-            service_ids = blocked_service_preset_ids(preset_key, set(services))
-            if preset_key != BLOCKED_SERVICE_PRESET_CUSTOM and not service_ids:
+            service_ids = blocked_service_preset_ids(
+                preset_key,
+                set(services),
+                groups,
+            )
+
+            if (
+                preset_key != BLOCKED_SERVICE_PRESET_CUSTOM
+                and not service_ids
+            ):
                 errors["base"] = "unsupported_service_group"
             else:
                 self._blocked_service_defaults = {
-                    CONF_DISPLAY_NAME: blocked_service_preset_name(preset_key),
+                    CONF_DISPLAY_NAME: blocked_service_preset_name(
+                        preset_key,
+                        groups,
+                    ),
                     CONF_BLOCKED_SERVICE_IDS: list(service_ids),
                 }
                 return await self.async_step_blocked_services()
+
         return self.async_show_form(
             step_id="blocked_service_preset",
             data_schema=vol.Schema(
@@ -406,7 +421,7 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
                     vol.Required(
                         CONF_BLOCKED_SERVICE_PRESET,
                         default=BLOCKED_SERVICE_PRESET_CUSTOM,
-                    ): vol.In(blocked_service_preset_choices())
+                    ): vol.In(blocked_service_preset_choices(groups))
                 }
             ),
             errors=errors,
@@ -969,34 +984,27 @@ class OptionsFlowHandler(_OPTIONS_FLOW_BASE):
         return self.async_create_entry(title="", data=self._options)
 
     async def _async_blocked_service_choices(self) -> dict[str, str]:
-        """Return available blocked service choices."""
-        manager = self.hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id)
-        if manager is not None:
-            try:
-                services = await manager.client.async_get_available_blocked_services()
-            except Exception:  # noqa: BLE001 - keep setup usable with fallback choices
-                services = {}
-            if services:
-                self._blocked_service_choices = services
-                return services
-        fallback = {
-            "youtube": "YouTube",
-            "facebook": "Facebook",
-            "instagram": "Instagram",
-            "tiktok": "TikTok",
-            "snapchat": "Snapchat",
-            "discord": "Discord",
-            "reddit": "Reddit",
-            "netflix": "Netflix",
-            "twitch": "Twitch",
-            "steam": "Steam",
-            "epic_games": "Epic Games",
-            "roblox": "Roblox",
-            "onlyfans": "OnlyFans",
-        }
-        self._blocked_service_choices = fallback
-        return fallback
+        """Return live blocked-service choices from AdGuard Home."""
+        manager = self.hass.data.get(DOMAIN, {}).get(
+            self._config_entry.entry_id
+        )
 
+        if manager is None:
+            return self._blocked_service_choices
+
+        try:
+            services, groups = (
+                await manager.client.async_get_blocked_services_catalog()
+            )
+        except Exception:  # noqa: BLE001
+            # Preserve previously loaded choices if the API is temporarily
+            # unavailable; do not substitute a hard-coded service list.
+            return self._blocked_service_choices
+
+        self._blocked_service_choices = services
+        self._blocked_service_groups = groups
+        return services
+        
     async def _async_blocked_service_target_choices(self) -> dict[str, str]:
         """Return global and persistent-client targets for built-in services."""
         choices = {TARGET_GLOBAL: "Everyone using this AdGuard Home instance"}
